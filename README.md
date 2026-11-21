@@ -229,6 +229,27 @@ bx    lr
 
 ---
 
+## Verified on hardware
+
+Everything measured so far was produced on this exact combination:
+
+| | |
+|---|---|
+| **Board** | LXB723ZG-P1 core board — STM32H723ZGT6, Cortex-M7 r1p2, LQFP144, 1MB Flash / 564KB RAM |
+| **Debug probe** | Flash Pro (CMSIS-DAP), VID:PID `0d28:0204` |
+| **Clock** | 64 MHz HSI (reset default), no PLL configured, I-Cache and D-Cache left off |
+| **Debug transport** | RTT over SWD — no screen, no USB, no serial cable needed |
+
+Display hardware planned but **not yet exercised**: ST7789 on SPI, wired from the 2×30 pin
+headers (SCK=`PG13`, MOSI=`PG14`, CS=`PG8`, DC=`PG15`, BL=`PG12`).
+The larger `STM32N647` board with a 4.3" RGB LCD and GT911 capacitive touch is the intended
+primary target for the display and touch work, since its LTDC scans the panel out in hardware.
+
+Pin assignments and the full board reference are in
+[`docs/HARDWARE-NOTES.md`](docs/HARDWARE-NOTES.md).
+
+---
+
 ## Quick start
 
 ### Dependencies
@@ -291,6 +312,7 @@ most common mistake when measuring real-time behaviour.
 
 ```
 ZayGO/
+├── LICENSE                MIT
 ├── README.md              ← you are here (English)
 ├── README.zh-CN.md        中文版
 ├── PLAN.md                implementation plan: criteria, phases, risks (English)
@@ -333,4 +355,7 @@ that. It is not an acronym and it does not stand for anything.
 
 ## Licence
 
-Not decided yet. No licence terms are introduced during the design phase.
+MIT — see [`LICENSE`](LICENSE).
+
+The pinned dependency `rtt-target` is MIT/Apache-2.0 dual licensed, and `cortex-m` /
+`cortex-m-rt` are Apache-2.0, so MIT is compatible with the whole dependency tree.

@@ -199,6 +199,26 @@ bx    lr
 
 ---
 
+## 实测所用的硬件
+
+到目前为止的全部数据，都是在这套组合上跑出来的：
+
+| | |
+|---|---|
+| **开发板** | LXB723ZG-P1 核心板 —— STM32H723ZGT6，Cortex-M7 r1p2，LQFP144，1MB Flash / 564KB RAM |
+| **调试器** | Flash Pro（CMSIS-DAP），VID:PID `0d28:0204` |
+| **时钟** | 64 MHz HSI（复位默认），未配 PLL，I-Cache 与 D-Cache 均未开启 |
+| **调试通道** | SWD 上的 RTT —— 不需要屏幕、USB 或串口线 |
+
+已规划但**尚未实际验证**的显示硬件：ST7789 走 SPI，从 2×30 排针引出
+（SCK=`PG13`、MOSI=`PG14`、CS=`PG8`、DC=`PG15`、BL=`PG12`）。
+带 4.3 寸 RGB LCD 与 GT911 电容触摸的 `STM32N647` 是显示与触摸部分的**主力目标平台**，
+因为它的 LTDC 由硬件直接扫出画面。
+
+完整引脚分配与板卡参考见 [`docs/HARDWARE-NOTES.md`](docs/HARDWARE-NOTES.md)。
+
+---
+
 ## 快速开始
 
 ### 依赖
@@ -257,6 +277,7 @@ python analysis/parse.py out-idle.csv
 
 ```
 ZayGO/
+├── LICENSE                MIT
 ├── README.md              ← 你在这里
 ├── PLAN.md                实施计划：判据、阶段、实现方式、风险
 ├── docs/
@@ -292,8 +313,12 @@ ZayGO/
 
 ## 命名
 
-`ZayGO` 是暂定名，尚未确定。
+`ZayGO`。没有特定含义——只是当时觉得顺口，有些名字就是这样。
+它不是缩写缩写词，也不代表任何东西。
 
 ## 许可
 
-未定。在设计阶段，先不引入具体许可条款。
+MIT —— 见 [`LICENSE`](LICENSE)。
+
+锁定的依赖 `rtt-target` 是 MIT/Apache-2.0 双许可，`cortex-m` / `cortex-m-rt` 是 Apache-2.0，
+因此 MIT 与整个依赖树兼容。
