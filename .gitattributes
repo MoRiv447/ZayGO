@@ -1,0 +1,10 @@
+# 统一换行为 LF（Windows 上的编辑器仍可本地用 CRLF）
+* text=auto eol=lf
+
+# 二进制资源不做换行转换
+*.pdf binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.bin binary
+*.elf binary

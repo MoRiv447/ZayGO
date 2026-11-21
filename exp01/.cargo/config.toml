@@ -1,0 +1,24 @@
+[target.thumbv7em-none-eabihf]
+# runner 里的 chip 必须与实际芯片一致。
+# 常见型号：STM32H723ZGTx（正点原子 H723 核心板多为 ZGT6）、STM32H723VGTx
+# 不确定时执行：probe-rs chip list | grep -i h723
+#
+# --- 探针选择 ---
+# 只插一个探针时 probe-rs 自动选，不用加参数。
+# 插了多个（DAPLink + ST-Link 同时在）必须先 `probe-rs list` 拿编号，再 --probe 指定，
+# 否则报 "multiple probes found"。
+#
+#   DAPLink:  --probe 0d28:0204
+#   ST-Link:  --probe 0483:3748
+#
+# --- 速率 ---
+# 廉价 DAPLink 多为 USB Full Speed，SWD 时钟开太高会报 parity error。
+# 出现 "parity error" / "target not found" 时降到 --speed 1000（1MHz）。
+#
+# 完整示例（DAPLink + 降速）：
+# runner = "probe-rs run --chip STM32H723ZGTx --probe 0d28:0204 --speed 1000"
+runner = "probe-rs run --chip STM32H723ZGTx"
+rustflags = ["-C", "link-arg=-Tlink.x"]
+
+[build]
+target = "thumbv7em-none-eabihf"

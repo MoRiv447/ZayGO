@@ -1,0 +1,15 @@
+[package]
+name = "exp01"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
+cortex-m-rt = "0.7"
+rtt-target = "0.5"
+
+[profile.release]
+opt-level = 3
+lto = true
+debug = true          # 保留符号，probe-rs 报错时能定位
+codegen-units = 1     # 测量代码不希望被跨单元优化打乱时序

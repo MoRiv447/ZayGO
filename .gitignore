@@ -1,0 +1,22 @@
+# Rust
+target/
+**/*.rs.bk
+
+# 本地提取的中间产物
+.tmp/
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+
+# 实验输出
+*.csv
+/flash-backup.*
+
+# OS
+Thumbs.db
+.DS_Store
+
+# WorkBuddy 本地记忆（含个人上下文，不进版本库）
+.workbuddy/
