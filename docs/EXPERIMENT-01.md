@@ -1,295 +1,292 @@
-# 实验 01：抢占式调度器的干扰量化
+# Experiment 01: Quantifying Interference from a Preemptive Scheduler
 
-> 目的：在写内核之前，用最小代码量测出「非实时负载对实时任务的实际干扰量级」，
-> 以及「带宽限制机制能否把干扰压到可接受范围」。
-> 这个实验不依赖任何未决的设计选择，且其结论会直接决定架构中哪些机制是必需的。
+> English version. [中文版](EXPERIMENT-01.zh-CN.md)
+
+> Purpose: before writing the kernel, use the minimum amount of code to measure the "actual magnitude of the interference that non-real-time load inflicts on real-time tasks",
+> and whether "a bandwidth cap mechanism can push that interference down into an acceptable range".
+> This experiment depends on no unresolved design choices, and its conclusions will directly determine which mechanisms in the architecture are necessary.
 >
-> **状态：已上板跑通（2026-11-21），三组数据齐。结论见文末「结果」章节。**
+> **Status: running on hardware and passing (2026-11-21), all three data sets complete. Conclusions are in the "Results" section at the end.**
 
 ---
 
-## 零、这个实验要回答什么
+## 0. What This Experiment Answers
 
-架构里有三个机制声称能保护实时性：
+Three mechanisms in the architecture claim to protect real-time behavior:
 
-| 机制 | 声称的效果 | 实验要验证的 |
+| Mechanism | Claimed effect | What the experiment must verify |
 |---|---|---|
-| 固定优先级抢占 | 实时任务总是先跑 | **切换开销到底多大**？在 550MHz / 800MHz 上是几百还是几千周期？ |
-| 带宽上限 | 非实时负载不能占满 CPU | **限流后实时任务的抖动降到多少**？ |
-| 隔离（MPU） | 内存错误不扩散 | **不测**（软件行为，无法用时序量化；靠后续 HIL 测试） |
+| Fixed-priority preemption | Real-time tasks always run first | **How large is the switch overhead, really**? At 550MHz / 800MHz, is it hundreds or thousands of cycles? |
+| Bandwidth cap | Non-real-time load cannot fill up the CPU | **After rate limiting, how far does real-time task jitter drop**? |
+| Isolation (MPU) | Memory errors do not spread | **Not measured** (software behavior, cannot be quantified by timing; covered by later HIL tests) |
 
-**关键未知量**：如果不管带宽，一个模拟 Web 负载能把实时任务的延迟打到多少？
-- 若结果是几十微秒 ⇒ 带宽限制是锦上添花
-- 若结果是几毫秒甚至几十毫秒 ⇒ **带宽限制是必需的，不是可选的**
+**Key unknown**: with no bandwidth limit, how high can a simulated Web load push real-time task latency?
+- If the result is tens of microseconds ⇒ bandwidth capping is a nice-to-have
+- If the result is a few milliseconds or even tens of milliseconds ⇒ **bandwidth capping is mandatory, not optional**
 
-这个数字直接决定：
-- 实时面与显示面的隔离强度要求
-- 准入控制的判据形式（静态 vs 测量）
-- 场景模板中 `budget` 字段的语义严格程度
+This number directly determines:
+- The isolation strength required between the real-time plane and the display controller
+- The form of the admission control criterion (static vs measurement-based)
+- How strict the semantics of the `budget` field in the scenario template must be
 
 ---
 
-## 一、实验设计
+## 1. Experimental Design
 
-### 1.1 硬件与工具
+### 1.1 Hardware and Tooling
 
-| 项 | 选择 | 说明 |
+| Item | Choice | Notes |
 |---|---|---|
-| 平台 A | STM32N647（Cortex-M55 800MHz） | 主力平台，M55 有 Helium 向量扩展、32KB D-Cache |
-| 平台 B | STM32H723（Cortex-M7 550MHz） | 对照组，M7 无向量扩展 |
-| 内核 | 自研最小调度器，Rust `no_std` | 不引入 FreeRTOS/Zephyr，避免被测对象本身干扰 |
-| 调试 | probe-rs + ITM/SWO | 你已有 probe-rs 0.32.0 经验 |
-| 计时 | **DWT->CYCCNT** | Cortex-M7/M55 均有 DWT 周期计数器 |
-| 探针 | `probe-rs attach` + RTT 或 SWO | 数据量小，用 RTT 更省心 |
+| Platform A | STM32N647 (Cortex-M55 800MHz) | Primary platform; the M55 has the Helium vector extension and a 32KB D-Cache |
+| Platform B | STM32H723 (Cortex-M7 550MHz) | Control group; the M7 has no vector extension |
+| Kernel | In-house minimal scheduler, Rust `no_std` | No FreeRTOS/Zephyr, so the system under test does not itself introduce interference |
+| Debugging | probe-rs + ITM/SWO | You already have experience with probe-rs 0.32.0 |
+| Timing | **DWT->CYCCNT** | Both Cortex-M7/M55 have a DWT cycle counter |
+| Probe | `probe-rs attach` + RTT or SWO | Small data volume, so RTT is less work |
 
-**为什么自己写调度器而不是用现成的**：要测的是「Zay 调度器的干扰」，用现成内核测出来的
-是「那个内核的干扰」，结论不可迁移。最小调度器约 300 行，一周内可写完。
+**Why write our own scheduler instead of using an off-the-shelf one**: what we need to measure is "the interference of the ZayGO scheduler"; measuring with an off-the-shelf kernel measures
+"that kernel's interference", and the conclusion does not transfer. The minimal scheduler is about 300 lines and can be written within a week.
 
-### 1.2 最小调度器规格
+### 1.2 Minimal Scheduler Specification
 
-只需实现三样东西：
+Only three things need to be implemented:
 
 ```
-1. 两个固定优先级（PRI0 实时、PRI1 普通）
-2. SysTick 1kHz 抢占式调度
-3. 上下文切换（保存/恢复寄存器）
+1. Two fixed priorities (PRI0 real-time, PRI1 normal)
+2. SysTick 1kHz preemptive scheduling
+3. Context switch (save/restore registers)
 ```
 
-**不实现**：优先级继承、时间片、阻塞原语、内存管理、MPU 配置。
-（MPU 隔离的正确性另用 HIL 故障注入测，不在本实验。）
+**Not implemented**: priority inheritance, time slicing, blocking primitives, memory management, MPU configuration.
+(The correctness of MPU isolation is measured separately with HIL fault injection, not in this experiment.)
 
-上下文切换的上下文保存用 `#[naked]` + `global_asm!`，
-这是 Rust 抢占式内核的已知难点（M7/M55 的自动压栈只保存 r0-r3/r12/lr/pc/xPSR，
-其余需手写保存）。
+Context saving for the context switch uses `#[naked]` + `global_asm!`;
+this is a known difficulty for preemptive Rust kernels (the automatic stacking on M7/M55 saves only r0-r3/r12/lr/pc/xPSR,
+the rest has to be saved by hand).
 
-### 1.3 三个测试负载
+### 1.3 Three Test Loads
 
-| 负载 | 描述 | 模拟对象 |
+| Load | Description | What it simulates |
 |---|---|---|
-| **L-A 空闲** | 只有实时任务，系统几乎空转 | 基线 |
-| **L-B 满载 CPU** | 普通优先级任务死循环，无任何让出 | 「一个失控的 Web 负载」 |
-| **L-C 模拟 Web** | 普通优先级任务循环做：解析固定缓冲区 + 填充帧缓冲 + "发包" | 真实管理面负载 |
+| **L-A Idle** | Only the real-time task exists, the system nearly idles | Baseline |
+| **L-B Full CPU load** | Normal-priority task in a tight infinite loop, never yields | "An out-of-control Web load" |
+| **L-C Simulated Web** | Normal-priority task loops: parse a fixed buffer + fill the frame buffer + "send a packet" | A real management plane load |
 
-L-C 很重要，因为**纯死循环是最好情况**（无 cache miss、无分支预测失败、无内存带宽争用）。
-真实的 HTTP 解析 + 帧缓冲填充会触发 D-Cache miss 和内存带宽争用，
-干扰会显著更大。L-C 要尽量真实。
+L-C matters because **a pure infinite loop is the best case** (no cache miss, no branch prediction failure, no memory bandwidth contention).
+Real HTTP parsing + frame buffer filling triggers D-Cache misses and memory bandwidth contention,
+so the interference will be significantly larger. L-C must be as realistic as possible.
 
-### 1.4 测量方法
+### 1.4 Measurement Method
 
-**每个实时任务周期记录三个量**：
+**Three quantities are recorded per real-time task period**:
 
 ```
-t_release   : 任务被唤醒的时刻（软件时间戳）
-t_start     : 任务真正开始执行的时刻
-t_end       : 任务执行完毕的时刻
+t_release   : the moment the task is woken (software timestamp)
+t_start     : the moment the task actually begins executing
+t_end       : the moment the task finishes executing
 ```
 
-由此得到：
+From these:
 
-| 指标 | 定义 | 意义 |
+| Metric | Definition | Meaning |
 |---|---|---|
-| **释放延迟** | `t_start - t_release` | **核心指标**：实时任务被普通任务拖延了多久 |
-| 执行时间 | `t_end - t_start` | 负载是否有效 |
-| 周期抖动 | 相邻两次 `t_start` 之差 - 周期 | 长期稳定性 |
+| **Release latency** | `t_start - t_release` | **Core metric**: how long the real-time task was held up by a normal-priority task |
+| Execution time | `t_end - t_start` | Whether the load was effective |
+| Period jitter | Difference between two consecutive `t_start` values - period | Long-term stability |
 
-**必须用 `t_start - t_release` 而不是 `t_end - t_start`**：
-后者测的是「任务跑多久」，测不出「被拖了多久」。很多人在这一点上测错。
+**You must use `t_start - t_release`, not `t_end - t_start`**:
+the latter measures "how long the task ran", it cannot measure "how long it was held up". Many people get this wrong.
 
-**采样要求**：
-- 连续 ≥ 10000 个周期（10 秒 @1kHz）
-- 记录**全部**样本，不要只记录 min/max（尾部才是问题）
-- 上报分位数：p50 / p99 / p99.9 / **最大值**
-- 原始样本写进 RTT 环形缓冲，实验后 dump 到 PC 做分布分析
+**Sampling requirements**:
+- ≥ 10000 consecutive periods (10 seconds @1kHz)
+- Record **all** samples, do not record only min/max (the tail is the problem)
+- Report percentiles: p50 / p99 / p99.9 / **maximum**
+- Write the raw samples into the RTT ring buffer, dump them to the PC after the experiment for distribution analysis
 
-### 1.5 带宽限制机制的原型
+### 1.5 Prototype of the Bandwidth Cap Mechanism
 
-不需要实现完整的 CBS。原型只需：
+There is no need to implement the full CBS. The prototype only needs:
 
 ```
-每个普通优先级任务声明 budget（如 20%）
-每 tick（1ms）检查该任务已用时间
-超出预算 → 该任务本 tick 剩余时间被挂起（强制让出给实时任务）
+each normal-priority task declares a budget (e.g. 20%)
+every tick (1ms) check how much of that budget the task has used
+over budget -> the task is suspended for the rest of this tick (forced yield to the real-time task)
 ```
 
-这是 CBS 的简化版，足够回答"限流能否把干扰压下去"。
+This is a simplified version of CBS, enough to answer "can rate limiting push the interference down".
 
-### 1.6 实验矩阵
+### 1.6 Experiment Matrix
 
-| # | 平台 | 负载 | 带宽限制 | 目的 |
+| # | Platform | Load | Bandwidth cap | Purpose |
 |---|---|---|---|---|
-| 1 | M55 | L-A | — | **基线**：系统本身能跑多准 |
-| 2 | M55 | L-B | 无 | 最坏情况的干扰量级 |
-| 3 | M55 | L-C | 无 | 真实负载的干扰量级 |
-| 4 | M55 | L-C | 20% | 限流是否有效 |
-| 5 | M55 | L-C | 5% | 限流是否加剧饥饿 |
-| 6 | M7 | L-A | — | 平台对照：切换开销差异 |
-| 7 | M7 | L-C | 无 | 平台对照：干扰量级差异 |
+| 1 | M55 | L-A | — | **Baseline**: how accurate the system is on its own |
+| 2 | M55 | L-B | none | Magnitude of the interference in the worst case |
+| 3 | M55 | L-C | none | Magnitude of the interference under a realistic load |
+| 4 | M55 | L-C | 20% | Whether rate limiting works |
+| 5 | M55 | L-C | 5% | Whether rate limiting makes starvation worse |
+| 6 | M7 | L-A | — | Platform control: difference in switch overhead |
+| 7 | M7 | L-C | none | Platform control: difference in interference magnitude |
 
-**实验 1 是对照组**，它测出的是「即使没有干扰，实时任务本身也有多少抖动」。
-这个数字是后面所有比较的分母——**没有它，任何"干扰 3ms"的说法都无法解读**
-（3ms 是相对于 0 还是相对于 50µs？）。
+**Experiment 1 is the control group**: it measures "how much jitter the real-time task has on its own, even with no interference".
+This number is the denominator of every later comparison — **without it, any claim of "3ms of interference" cannot be interpreted**
+(3ms relative to 0, or relative to 50µs?).
 
 ---
 
-## 二、预期的可交付结果
+## 2. Expected Deliverables
 
-| 产出 | 形式 |
+| Deliverable | Form |
 |---|---|
-| 切换开销 | M55 / M7 各自的上下文切换周期数（CYCCNT 实测，非估算） |
-| 干扰量化 | 7 个实验点的释放延迟分布（p50/p99/p99.9/max） |
-| 限流有效性 | 实验 3 vs 4 vs 5 的对比曲线 |
-| 架构判据 | 一份结论：带宽限制是必需还是可选，阈值定在哪 |
-| 原始数据 | RTT dump 的 CSV，可复现 |
+| Switch overhead | Context switch cycle count for M55 / M7 respectively (measured with CYCCNT, not estimated) |
+| Interference quantification | Release latency distribution over the 7 experiment points (p50/p99/p99.9/max) |
+| Rate limiting effectiveness | Comparison curves of experiment 3 vs 4 vs 5 |
+| Architecture criterion | One conclusion: is bandwidth capping mandatory or optional, and where the threshold sits |
+| Raw data | The CSV from the RTT dump, reproducible |
 
-### 结论的用法
+### How to Use the Conclusion
 
-- 若「无限制干扰」< 实时任务周期的 1% ⇒ 带宽限制降级为「防御性措施」，架构重心转向准入控制
-- 若 > 10% ⇒ 带宽限制升为「架构基石」，`budget` 字段必须严格校验，场景模板编译期就要拒绝不可能的声明
-- 若介于 1%~10% ⇒ 需要按**不同临界性**分级，实时面独占带宽、管理面共享、插件面受限
+- If "unlimited interference" < 1% of the real-time task period ⇒ bandwidth capping is downgraded to a "defensive measure", and the architectural focus shifts to admission control
+- If > 10% ⇒ bandwidth capping is promoted to an "architectural cornerstone", the `budget` field must be strictly validated, and the scenario template must reject impossible declarations at compile time
+- If between 1%~10% ⇒ grading by **different criticality** is required: the real-time plane gets exclusive bandwidth, the management plane shares it, the plugin plane is restricted
 
 ---
 
-## 三、风险与注意事项
+## 3. Risks and Caveats
 
-| 风险 | 应对 |
+| Risk | Mitigation |
 |---|---|
-| DWT->CYCCNT 在 D-Cache 开启时测量有误差 | 测量代码放 ITCM；或用 `__DSB()` 后再读 |
-| SWO/RTT 传输本身有抖动，影响测量 | 采样与传输分离：先在 RAM 环形缓冲存样本，实验结束后统一 dump |
-| 上下文切换写错（保存不全） | 已知坑：M7/M55 自动压栈只存部分寄存器；建议在切回后用一组 canary 变量校验 |
-| SysTick 1kHz 本身抖动 | M7/M55 的 SysTick 精度足够；记录 `t_release` 时**立即**打时间戳，不要等 |
-| 编译器优化改变时序 | 关键路径用 `#[inline(never)]` + `volatile` |
-| 死循环负载导致无法观察 | 用 L-B 时靠 SysTick 中断打断，不靠协作让出 |
+| DWT->CYCCNT measurements are inaccurate when D-Cache is enabled | Put the measurement code in ITCM; or read the counter after `__DSB()` |
+| SWO/RTT transfer itself has jitter, which pollutes the measurement | Separate sampling from transfer: store the samples in a RAM ring buffer first, then dump them all at once after the experiment |
+| Context switch written wrong (context not fully saved) | Known pitfall: the automatic stacking on M7/M55 stores only some of the registers; validate with a set of canary variables after switching back |
+| SysTick 1kHz itself has jitter | The SysTick precision of M7/M55 is sufficient; when recording `t_release`, **immediately** take the timestamp, do not wait |
+| Compiler optimization changes the timing | Use `#[inline(never)]` + `volatile` on the critical path |
+| The infinite-loop load makes observation impossible | For L-B, break in via the SysTick interrupt, do not rely on cooperative yielding |
 
 ---
 
-## 四、这个实验不回答什么
+## 4. What This Experiment Does Not Answer
 
-诚实标注边界，避免后续误用：
+Stated honestly, to avoid later misuse:
 
-- **不测内存隔离的正确性**。MPU 分区的有效性要靠故障注入测试（HIL），不是时序测量。
-- **不测 WCET 的 sound 性**。DWT 测的是执行时间分布，不是最坏情况上界；
-  要 sound 上界需要静态分析或 MBTA + EVT 论证。
-- **不测总线竞争的真实影响**。L-C 是软件模拟，不等于真实 SPI/网口流量。
-- **不测调度器不变式**。那是 Verus 的活。
-- **单核结论**。多核（M7 有 M4 核、N6 无）下 cache/bus 争用模型不同，需另做实验。
+- **It does not measure the correctness of memory isolation**. The effectiveness of MPU partitioning has to be proven by fault injection testing (HIL), not by timing measurement.
+- **It does not measure the soundness of WCET**. DWT measures the execution time distribution, not the worst-case upper bound;
+  a sound upper bound requires static analysis or an MBTA + EVT argument.
+- **It does not measure the real impact of bus contention**. L-C is a software simulation, which is not the same as real SPI/Ethernet traffic.
+- **It does not measure scheduler invariants**. That is Verus's job.
+- **Single-core conclusions**. On multi-core (M7 has an M4 core, N6 does not) the cache/bus contention model differs, a separate experiment is needed.
 
 ---
 
-## 五、交付物清单
+## 5. Deliverables Checklist
 
 ```
 exp01/
-├── README.md              # 本文档
+├── README.md              # this document
 ├── Cargo.toml
 ├── src/
-│   ├── main.rs            # 实验入口，命令行选择实验编号
-│   ├── sched.rs           # 最小抢占式调度器（约 300 行）
-│   ├── context.rs         # naked 上下文切换
-│   ├── time.rs            # DWT->CYCCNT 封装
-│   ├── load.rs            # L-B / L-C 负载
-│   ├── measure.rs         # 采样与分位数统计
-│   └── rtt.rs             # 结果 dump
-├── analysis/
-│   ├── parse.py           # CSV → 分布图
-│   └── RESULTS.md         # 实验结论（填入）
-└── scripts/
-    ├── flash.sh
-    └── run.sh
+│   ├── main.rs            # entry point, pick the experiment number
+│   ├── sched.rs           # minimal preemptive scheduler (~300 lines)
+│   ├── context.rs         # naked context switch
+│   ├── time.rs            # DWT->CYCCNT wrapper
+│   ├── load.rs            # L-B / L-C loads
+│   ├── measure.rs         # sampling and percentile statistics
+│   └── rtt.rs             # result dump
+│
+│   ├── parse.py           # CSV -> distribution plot
+│   └── RESULTS.md         # experiment conclusions (to fill in)
 ```
 
 ---
 
-## 六、执行顺序建议
+## 6. Recommended Execution Order
 
-1. **先只做实验 1（基线）**。如果基线抖动就有几毫秒，说明测量方法本身有问题（或者 SysTick 精度不够），
-   后面全部实验都不可信。基线是所有实验的地基。
-2. 实验 2（满载 CPU）→ 得到最坏干扰上界。
-3. 实验 3（模拟 Web）→ 得到真实干扰。
-4. 实验 4/5（限流）→ 验证机制有效性。
-5. 实验 6/7（M7 对照）→ 确认平台差异，若差异大则架构要按平台分别配置参数。
+1. **Do experiment 1 (baseline) alone first**. If the baseline jitter is already several milliseconds, the measurement method itself has a problem (or SysTick precision is insufficient),
+   and every later experiment is untrustworthy. The baseline is the foundation of all experiments.
+2. Experiment 2 (full CPU load) → obtain the worst-case interference upper bound.
+3. Experiment 3 (simulated Web) → obtain the realistic interference.
+4. Experiment 4/5 (rate limiting) → verify the effectiveness of the mechanism.
+5. Experiment 6/7 (M7 control) → confirm the platform difference; if the difference is large, the architecture must be configured per platform.
 
-**不要一上来就做全部 7 个**。实验 1 单独跑通并确认数字合理，是进入下一步的前提。
+**Do not start with all 7 at once**. Getting experiment 1 running on its own and confirming that the numbers make sense is the precondition for moving to the next step.
 
 ---
 
-## 七、结果（2026-11-21 实测）
+## 7. Results (Measured 2026-11-21)
 
-平台：鹿小班 LXB723ZG-P1，STM32H723ZGT6，Cortex-M7 r1p2，**64 MHz HSI（未配 PLL）**，
-未开 I-Cache / D-Cache，探针 Flash Pro(CMSIS-DAP)。
+Platform: Lu Xiaoban LXB723ZG-P1, STM32H723ZGT6, Cortex-M7 r1p2, **64 MHz HSI (no PLL configured)**,
+I-Cache / D-Cache not enabled, probe Flash Pro(CMSIS-DAP).
 
-每个模式 8192 个样本（1 ms 周期，约 8.2 秒）。
+8192 samples per mode (1 ms period, about 8.2 seconds).
 
-### 7.1 调度延迟（`t_start − t_release`，单位：周期 / µs）
+### 7.1 Dispatch Latency (`t_start − t_release`, unit: cycles / µs)
 
-| 模式 | 负载特征 | 冷启动 | min | p50 | p99 | p99.9 | max | mean |
+| Mode | Load signature | Cold start | min | p50 | p99 | p99.9 | max | mean |
 |---|---|---|---|---|---|---|---|---|
-| Idle | 8×nop 空转，无内存访问 | 431 | 229 | 229 | 234 | 234 | **234** | 231.5 |
-| Spin | 512 次乘/循环，纯寄存器 | 415 | 222 | 226 | 226 | 226 | **235** | 226.0 |
-| Web | 256 字节分支密集读 + 128 次写内存 | 431 | 229 | 234 | 234 | 234 | **234** | 232.3 |
+| Idle | 8×nop idle spin, no memory access | 431 | 229 | 229 | 234 | 234 | **234** | 231.5 |
+| Spin | 512 multiplies/loop, pure registers | 415 | 222 | 226 | 226 | 226 | **235** | 226.0 |
+| Web | 256-byte branch-heavy read + 128 memory writes | 431 | 229 | 234 | 234 | 234 | **234** | 232.3 |
 
-换算成时间（@64 MHz，1 周期 = 15.6 ns）：
+Converted to time (@64 MHz, 1 cycle = 15.6 ns):
 
-| 模式 | p50 | max | mean |
+| Mode | p50 | max | mean |
 |---|---|---|---|
 | Idle | 3.58 µs | 3.66 µs | 3.62 µs |
 | Spin | 3.53 µs | 3.67 µs | 3.53 µs |
 | Web | 3.66 µs | 3.66 µs | 3.63 µs |
 
-### 7.2 周期抖动（相邻两次 `t_start` 之差）
+### 7.2 Period Jitter (difference between two consecutive `t_start` values)
 
-| 模式 | p50 | min | max | 峰峰值 |
+| Mode | p50 | min | max | Peak-to-peak |
 |---|---|---|---|---|
-| Idle | 63998 | 63791 | 64013 | 222 周期 = **3.5 µs** |
-| Spin | 63997 | 63791 | 64011 | 220 周期 = **3.4 µs** |
-| Web | 64001 | 63777 | 64013 | 236 周期 = **3.7 µs** |
+| Idle | 63998 | 63791 | 64013 | 222 cycles = **3.5 µs** |
+| Spin | 63997 | 63791 | 64011 | 220 cycles = **3.4 µs** |
+| Web | 64001 | 63777 | 64013 | 236 cycles = **3.7 µs** |
 
-### 7.3 判读
+### 7.3 Interpretation
 
-**结论 1：稳态调度延迟 ≈ 3.5–3.7 µs（226–234 周期），三种负载差异 ≤ 2.8%。**
+**Conclusion 1: steady-state dispatch latency ≈ 3.5–3.7 µs (226–234 cycles), the spread across the three loads is ≤ 2.8%.**
 
-负载从"什么都不做"换成"每轮 512 次乘加"，再从"纯算术"换成"分支密集 + 写内存"，
-延迟几乎不动。**负载类型不是调度延迟的影响因素。**
+The load changes from "doing nothing" to "512 multiply-adds per round", then from "pure arithmetic" to "branch-heavy + memory writes",
+and the latency barely moves. **The load type is not a factor in dispatch latency.**
 
-**结论 2：没有长尾。** 三种模式的 `p50`、`p99`、`p99.9`、`max` 全部落在 226–235 这一个
-9 周期的带宽内（Web 的 min=229 与 p50=234 也只差 5 周期）。对硬实时而言，
-**可预测性比低均值更有价值，而这组数据是零长尾的。**
+**Conclusion 2: no long tail.** The `p50`, `p99`, `p99.9` and `max` of all three modes all fall within a single band of 226–235 cycles, 9 cycles wide (Web's min=229 differs from p50=234 by only 5 cycles). For hard real-time,
+**predictability is worth more than a low mean, and this data set has a zero long tail.**
 
-**结论 3：`max=415–431` 全部来自样本 0，是冷启动伪影，不是干扰。**
-首次调度时 I-Cache 为空、分支预测器未预热，所以慢近一倍。8191 个稳态样本
-没有一个超过 300 周期。**把样本 0 混进统计会把 max 抬高 84%，掩盖真实分布** ——
-这也是 `analysis/parse.py` 现在单独列出它的原因。
+**Conclusion 3: `max=415–431` comes entirely from sample 0, it is a cold start artifact, not interference.**
+At the first dispatch the I-Cache is empty and the branch predictor is not warmed up, so it is nearly twice as slow. Not one of the 8191 steady-state samples
+exceeds 300 cycles. **Mixing sample 0 into the statistics inflates max by 84% and hides the real distribution** —
+that is also why `analysis/parse.py` now lists it separately.
 
-**结论 4：为什么负载完全不起作用 —— 因为它从不关中断。**
-SysTick 优先级最高（`SHPR3[31:24]=0x00`），PendSV 最低（`[23:16]=0xF0`），
-负载任务从不执行 `cpsid i`、不持锁、不长时间占用总线。在这种前提下，
-**中断随时能进来，负载在干什么无关紧要。**
+**Conclusion 4: why the load has no effect at all — because it never disables interrupts.**
+SysTick has the highest priority (`SHPR3[31:24]=0x00`), PendSV the lowest (`[23:16]=0xF0`),
+the load task never executes `cpsid i`, never holds a lock, and never occupies the bus for long. Under those conditions,
+**interrupts can come in at any moment, and what the load is doing is irrelevant.**
 
-### 7.4 这个结果否证了原来的假设
+### 7.4 This Result Falsifies the Original Hypothesis
 
-原设计的判据是「无限制干扰 > 任务周期的 10% ⇒ 带宽限制升为架构基石」。
-实测干扰约 0%，**按这个判据，带宽限制对"调度延迟"不是必需项**。
+The criterion in the original design was "unlimited interference > 10% of the task period ⇒ bandwidth capping is promoted to an architectural cornerstone".
+The measured interference is about 0%, so **under that criterion, bandwidth capping is not a requirement for "dispatch latency"**.
 
-但这不是"带宽限制没用"，而是**这次实验没测到它要解决的场景**。
-真正的威胁维度一个都没被覆盖：
+But this is not "bandwidth capping is useless", it is **that this experiment never hit the scenario it was designed for**.
+Not one of the real threat dimensions was covered:
 
-| 威胁 | 为什么没测到 | 怎么测 |
+| Threat | Why it was not measured | How to measure it |
 |---|---|---|
-| **中断屏蔽时长** | 负载从不 `cpsid i` | 负载进临界区屏蔽中断 N 周期，扫 N |
-| **总线争用** | 无 DMA、无 SPI、无以太网流量 | 接真实外设跑真实吞吐 |
-| **Cache 抖动** | 复位后 cache 默认关闭 | 开启 I/D-Cache 后重测 |
-| **长工作负载** | 实时任务工作量只有 32 次加法 | 加长到接近周期边界 |
-| **高频时钟** | 64 MHz HSI | 配 PLL 到 550 MHz（cache 与等待周期全变） |
+| **Interrupt masking duration** | The load never executes `cpsid i` | Have the load enter a critical section that masks interrupts for N cycles, and sweep N |
+| **Bus contention** | No DMA, no SPI, no Ethernet traffic | Attach real peripherals and run real traffic |
+| **Cache jitter** | After reset the cache is off by default | Re-measure with I/D-Cache enabled |
+| **Long workload** | The real-time task's work is only 32 additions | Extend it to approach the period boundary |
+| **High clock frequency** | 64 MHz HSI | Configure the PLL up to 550 MHz (cache and wait states all change) |
 
-⇒ **下一步应是实验 02：临界区屏蔽中断的敏感度扫描**（轴是屏蔽时长，不是负载类型）。
-这才是"带宽限制是否必需"的真正判据。
+⇒ **The next step should be experiment 02: a sensitivity sweep over interrupt masking in critical sections** (the axis is masking duration, not load type).
+That is the real criterion for "is bandwidth capping mandatory".
 
-### 7.5 已知的实验局限（诚实标注）
+### 7.5 Known Experimental Limitations (Stated Honestly)
 
-1. **只测了 dispatch latency**（释放到开始执行），不是任务的响应时间。
-2. **64 MHz、无 cache、无 PLL**：绝对数值不能外推到 550 MHz 的实际产品。
-   不过"负载类型不影响调度延迟"这个定性结论不依赖频率。
-3. **单核、无 DMA 并发**：总线上只有 CPU 一个主设备。
-4. **Idle 模式已不是真正的空闲**：原设计用 `wfi`，但实测一进 Sleep 调试口就失联
-   （见 `exp01/README.md` 的踩坑记录），改为 8×nop 空转。代价是功耗不为零，
-   好处是排除了 WFI 唤醒延迟、且三种模式同口径可比。
-
+1. **Only dispatch latency was measured** (release to start of execution), not the task's response time.
+2. **64 MHz, no cache, no PLL**: the absolute numbers cannot be extrapolated to a real product running at 550 MHz.
+   However, the qualitative conclusion "the load type does not affect dispatch latency" does not depend on the frequency.
+3. **Single core, no concurrent DMA**: the CPU is the only master on the bus.
+4. **Idle mode is no longer truly idle**: the original design used `wfi`, but as measured, as soon as it entered Sleep the debug port lost contact
+   (see the pitfall record in `exp01/README.md`), so it was changed to an 8×nop idle spin. The cost is non-zero power,
+   the benefit is that WFI wake-up latency is excluded and all three modes are directly comparable.

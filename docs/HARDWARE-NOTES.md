@@ -1,59 +1,65 @@
-# 硬件笔记：STM32H723 USB Host 与显示相关
+# Hardware Notes: STM32H723 USB Host and Display
 
-> 记录本项目涉及的外围硬件接线约束与踩坑点，避免重复查阅。
-> 全部结论基于 2026-11-19 检索的官方手册与社区实践。
-> 适用板子：**鹿小班 LXB723ZG-P1**（STM32H723ZGT6，LQFP144，1MB Flash / 564KB RAM），配 ST7789 SPI 屏。
+> English version. [中文版](HARDWARE-NOTES.zh-CN.md)
+>
+> Records the peripheral wiring constraints and pitfalls this project runs into, so they do not
+> have to be looked up twice.
+> All conclusions are based on official manuals and community practice retrieved on 2026-11-19.
+> Applies to: **LXB723ZG-P1** (STM32H723ZGT6, LQFP144, 1MB Flash / 564KB RAM) with an ST7789 SPI display.
 
 ---
 
-## 〇、板子身份与实测确认
+## 0. Board identity, confirmed by measurement
 
-原理图：随开发板资料包提供的 `LXB723ZG-P1原理图.pdf`（本机路径不入库）
-丝印映射：同目录 `排针和引脚丝印对应关系图.png`
+Schematic: `LXB723ZG-P1原理图.pdf` from the board's documentation package (local paths are not
+committed). Silkscreen mapping: `排针和引脚丝印对应关系图.png` from the same package.
 
-从芯片读出的实测值（优先于文档）：
+Values read straight out of the chip take priority over any documentation:
 
-| 项 | 实测 |
+| Item | Measured |
 |---|---|
 | CPUID (`0xE000ED00`) | `0x411FC272` → Cortex-M7 **r1p2** |
-| Flash 容量 (`0x1FF1E880`) | `0x0400` = **1024 KB** |
-| DBGMCU_IDCODE (`0x5C001000`) | `0x10016483` → DEV_ID `0x483`（H72x/73x），REV `0x1001` |
-| DBGMCU 地址 | **`0x5C001000`**，**不是** F4/F7 的 `0xE0042000`（后者读全 0） |
-| 板内已有固件 | 是。VTOR=`0x08000000`、AIRCR.PRIGROUP=3（均非复位默认值） |
+| Flash size (`0x1FF1E880`) | `0x0400` = **1024 KB** |
+| DBGMCU_IDCODE (`0x5C001000`) | `0x10016483` → DEV_ID `0x483` (H72x/73x), REV `0x1001` |
+| DBGMCU address | **`0x5C001000`**, **not** the F4/F7 `0xE0042000` (which reads back as all zeros) |
+| Pre-existing firmware on the board | Yes. VTOR=`0x08000000`, AIRCR.PRIGROUP=3 (neither is the reset default) |
 
 ---
 
-## 〇之二、板载外设分配（原理图确认）
+## 0.1 On-board peripheral assignment (confirmed from the schematic)
 
-| 功能 | 引脚 / 网络 | 说明 |
+| Function | Pin / net | Note |
 |---|---|---|
-| **SPI 液晶**（FPC10-0.5 座 U7） | SCK=`PG13`、MOSI=`PG14`、CS=`PG8`、DC=`PG15`、BL=`PG12` | 板载 FPC 座；**但同组引脚也引到 2×30 排针，可用杜邦线直连 8 针模块** |
-| 用户 LED（蓝） | **`PG7`**（1K 限流） | 可做不依赖任何外设的状态指示 |
-| 电源 LED（红） | — | |
-| **SWD + USART1 排针**（2×4P 卧贴 H1） | SWCLK=`PA14`、SWDIO=`PA13`、USART1_RX=`PA10`、USART1_TX=`PA9`、RST、3.3V | 调试口与串口在同一组排针 |
-| **USB Type-C 16P**（U11） | 直连 `PA11`(USB0_N) / `PA12`(USB0_P)；**CC1/CC2 各 5.1kΩ 下拉**（R12/R13） | **只能是 Device（DFU/CDC），不能当 Host** |
-| 扩展 Flash | W25Q64，OSPI，NCS=`PG6` | |
-| TF 卡 | SDMMC1（`PC8`~`PC12`、`PD2`） | |
-| DCMI 摄像头 | `PG9`/`PG10`/`PG11`、`PC6`/`PC7`、`PD3` | |
-| 晶振 | **HSE 25MHz**（PH0/PH1）+ LSE 32.768kHz | 后续配 PLL 到 550MHz 有基础 |
-| 电源 | +5V 输入 → **RY3420**（U13，buck：IN/EN/FB/SW）→ 3.3V | 排针上有 2 个 +5V 引出 |
+| **SPI display** (FPC10-0.5 connector U7) | SCK=`PG13`, MOSI=`PG14`, CS=`PG8`, DC=`PG15`, BL=`PG12` | On-board FPC socket; **but the same pins are also broken out to the 2×30 headers, so a 8-pin module can be wired with jumper wires** |
+| User LED (blue) | **`PG7`** (1K series) | Can serve as a status indicator with no other peripheral involved |
+| Power LED (red) | — | |
+| **SWD + USART1 header** (2×4P SMD, H1) | SWCLK=`PA14`, SWDIO=`PA13`, USART1_RX=`PA10`, USART1_TX=`PA9`, RST, 3.3V | Debug port and serial share one header |
+| **USB Type-C 16P** (U11) | wired directly to `PA11`(USB0_N) / `PA12`(USB0_P); **CC1/CC2 each pulled down 5.1kΩ** (R12/R13) | **Device only (DFU/CDC), cannot act as Host** |
+| Expansion flash | W25Q64, OSPI, NCS=`PG6` | |
+| TF card | SDMMC1 (`PC8`~`PC12`, `PD2`) | |
+| DCMI camera | `PG9`/`PG10`/`PG11`, `PC6`/`PC7`, `PD3` | |
+| Crystals | **HSE 25MHz** (PH0/PH1) + LSE 32.768kHz | Basis for later PLL configuration up to 550MHz |
+| Power | +5V in → **RY3420** (U13, buck: IN/EN/FB/SW) → 3.3V | Two +5V pins broken out on the headers |
 
-### 对项目判断的三处修正
+### Three corrections to earlier project assumptions
 
-1. **ST7789 接线方式（本节曾判断错误，已更正）**
-   板上确有 FPC10-0.5 液晶座（U7），但它**与常见的 8 针 ST7789 模块机械不兼容**，
-   且随板未带 FPC 排线，该座实际不可用。
-   好在 `IO口引出` 段的引脚清单包含 `PG12/PG13/PG14/PG15/PG8`：
+1. **How to wire the ST7789 (this section was wrong before and is now corrected)**
+   The board does have an FPC10-0.5 display socket (U7), but it is **mechanically incompatible
+   with the common 8-pin ST7789 module**, and no FPC ribbon cable ships with the board, so that
+   socket is effectively unusable.
+   Fortunately the pin list in the `IO口引出` (pin break-out) section includes
+   `PG12/PG13/PG14/PG15/PG8`:
    ```
    PG14 PG15 PG12 PG10 PG13 PG11 PD7 PD5 PG9
    PG8  PG5  PG3  PD14 PD15 PG2  PG4 PG7
    ```
-   ⇒ **用杜邦线从排针直连 8 针模块，零成本，不需要 FPC 转接板。**
-   FPC 座与排针并联在同一组网络，空置无影响。
+   ⇒ **Wire the 8-pin module straight to the headers with jumper wires: zero cost, no FPC
+   adapter needed.** The FPC socket is in parallel with the headers on the same nets, so
+   leaving it empty has no effect.
 
-   8 针模块接线：
+   8-pin module wiring:
 
-   | 模块引脚 | 接板子 | 说明 |
+   | Module pin | Connect to | Note |
    |---|---|---|
    | VCC | 3.3V | |
    | GND | GND | |
@@ -61,89 +67,94 @@
    | SDA / MOSI | **PG14** | SPI6_MOSI |
    | DC | **PG15** | LCD_DC |
    | CS | **PG8** | SPI6_NSS |
-   | RES / RST | 3.3V 或任意 GPIO | 板上无独立 LCD_RST 网络 |
-   | BLK / BL | 3.3V（常亮）或 **PG12** | 板上有 LCD_BL_PG12，可能经三极管驱动 |
+   | RES / RST | 3.3V or any GPIO | No dedicated LCD_RST net on the board |
+   | BLK / BL | 3.3V (always on) or **PG12** | LCD_BL_PG12 exists on the board, possibly through a transistor |
 
-   > 引脚顺序以模块自身丝印为准，各家排列不同，不要照抄表格顺序。
+   > Follow the silkscreen on your own module — the pin order differs between vendors, do not
+   > copy the table order blindly.
 
-2. **PA9/PA10 确实是 USART1**（与 SWD 同组 2×4 排针），占用确认。但不影响 USB Host，
-   因为 VBUS 检测本来就可省。
-3. **Type-C 口不能当 USB Host** —— CC1/CC2 各挂 5.1kΩ 下拉，是标准 UFP（设备）配置，
-   且没有 VBUS 供电路径。要做 Host 必须从 **IO 引出排针**取 `PA11`/`PA12` 并自行供 5V。
+2. **PA9/PA10 really are USART1** (same 2×4 header as SWD), so they are indeed occupied. This
+   does not affect USB Host, because VBUS detection was optional anyway.
+3. **The Type-C socket cannot act as USB Host** — CC1 and CC2 each have a 5.1kΩ pull-down, the
+   standard UFP (device) configuration, and there is no VBUS supply path. To act as Host you must
+   take `PA11`/`PA12` from the **pin break-out headers** and supply 5V yourself.
 
-### 一个新机会：CDC 虚拟串口（暂缓）
+### A new opportunity: USB CDC (deferred)
 
-Type-C 直连 PA11/PA12 ⇒ STM32 可自行实现 **USB CDC**，一根 Type-C 线同时供电与通信，
-不需要 USB-TTL。但 Rust `no_std` 下要写 USB 设备栈（48MHz 时钟、端点配置、描述符），
-工作量大，**不适合 P0/P1 阶段**。列为 P2 之后的产品形态优化项。
+Because Type-C goes straight to PA11/PA12, the STM32 can implement **USB CDC** itself — one
+Type-C cable for both power and communication, no USB-TTL needed. But under Rust `no_std` that
+means writing a USB device stack (48MHz clock, endpoint configuration, descriptors), which is a
+lot of work and **not suitable for P0/P1**. Listed as a product-form optimisation after P2.
 
 ---
 
-## 一、背景：Nucleo 与核心板的差异
+## 1. Background: Nucleo versus a core board
 
+NUCLEO-H723ZG can act as a USB Host directly because it carries a kit of three parts; **a core
+board usually only breaks out the MCU pins, so all three have to be added yourself.**
 
-NUCLEO-H723ZG 能直接当 USB Host，是因为板上有三件套；**核心板通常只引出 MCU 引脚，这三件都要自己补**。
-
-| 器件 | 作用 | Nucleo (MB1364) | 核心板 |
+| Part | Purpose | Nucleo (MB1364) | Core board |
 |---|---|---|---|
-| Micro-AB 座 | USB 物理接口 | CN13 | ❌ 需自备 |
-| **VBUS 电源开关** | 5V 供电 + 限流 + 过流标志 | PD10 控制，PG7 报过流 | ❌ **必须补** |
-| USBLC6-2 ESD 保护 | D+/D- 静电防护 | 板载 | ❌ 建议补 |
-| USB 角色检测 ID | PA10 | CN13 pin4 | 固定 Host 可省 |
+| Micro-AB socket | USB physical interface | CN13 | ❌ bring your own |
+| **VBUS power switch** | 5V supply + current limit + overcurrent flag | driven by PD10, PG7 reports overcurrent | ❌ **must be added** |
+| USBLC6-2 ESD protection | D+/D- electrostatic protection | on board | ❌ recommended |
+| USB role detection ID | PA10 | CN13 pin4 | can be skipped for a fixed Host |
 
-**Nucleo CN13 引脚定义**（UM2407 Table 16）：
+**Nucleo CN13 pinout** (UM2407 Table 16):
 
-| pin | 信号 | MCU pin | 说明 |
+| pin | Signal | MCU pin | Note |
 |---|---|---|---|
-| 1 | VBUS | PA9 | 5V 供电，同时用于 VBUS 检测 |
+| 1 | VBUS | PA9 | 5V supply, also used for VBUS detection |
 | 2 | DM | PA11 | USB_OTG_HS_DM |
 | 3 | DP | PA12 | USB_OTG_HS_DP |
-| 4 | ID | PA10 | 角色检测（固定 Host 可省） |
+| 4 | ID | PA10 | role detection (can be skipped for a fixed Host) |
 | 5 | GND | — | |
 
-Nucleo 板上 USB 相关焊桥（UM2407 Table 12）：
-SB21（PA11）、SB22（PA12）、SB23（PA9）、SB24（PA10）、SB77（PD10 电源使能）、SB76（PG7 过流）。
+USB-related solder bridges on the Nucleo (UM2407 Table 12):
+SB21 (PA11), SB22 (PA12), SB23 (PA9), SB24 (PA10), SB77 (PD10 power enable), SB76 (PG7 overcurrent).
 
 ---
 
-## 二、H723 的 USB 外设
+## 2. The H723 USB peripheral
 
-### 2.1 能力
+### 2.1 Capabilities
 
-- **USB 2.0 high-speed/full-speed device/host/OTG**，带专用 DMA
-- **片上 FS PHY**（12 Mbps 够用，USB 鼠标是 FS 或 LS）
-- ULPI 接口（接外部 HS PHY 用，本项目不需要）
-- 相关引脚：PA11 = `OTG_HS_DM`、PA12 = `OTG_HS_DP`、PA9 = `OTG_HS_VBUS`、PA10 = `OTG_HS_ID`
+- **USB 2.0 high-speed/full-speed device/host/OTG**, with dedicated DMA
+- **On-chip FS PHY** (12 Mbps is enough — a USB mouse is FS or LS)
+- ULPI interface for an external HS PHY (not needed here)
+- Relevant pins: PA11 = `OTG_HS_DM`, PA12 = `OTG_HS_DP`, PA9 = `OTG_HS_VBUS`, PA10 = `OTG_HS_ID`
 
-**鼠标是 USB 全速/低速设备，用片上 FS PHY 即可，无需 ULPI 芯片、无需 48MHz 晶振。**
+**A mouse is a USB full-speed/low-speed device, so the on-chip FS PHY is sufficient — no ULPI
+chip and no 48MHz crystal needed.**
 
-### 2.2 时钟要求（易错）
+### 2.2 Clock requirement (easy to get wrong)
 
-USB FS 要求参考时钟误差 **< 500ppm**。
+USB FS requires a reference clock error **< 500ppm**.
 
-H723 时钟树的 USB Clock Mux 可选：**PLL1Q / PLL3Q / HSI48**。
+The H723 clock tree offers three sources for the USB Clock Mux: **PLL1Q / PLL3Q / HSI48**.
 
-> **HSI48 精度不足**（内部 RC 源），必须走 PLL。
-> 配错的表现：枚举失败、或「有时能识别有时不能」，极难排查。
-> CubeMX 会做检查，但需确认生成结果里 PLL 分频正确。
+> **HSI48 is not accurate enough** (internal RC source) — the PLL is mandatory.
+> Getting this wrong shows up as "enumeration fails" or "sometimes it is detected, sometimes not",
+> which is very hard to debug. CubeMX checks it, but confirm the generated PLL divider is right.
 
-### 2.3 VBUS 供电（ST 官方原文）
+### 2.3 VBUS supply (ST's own wording)
 
 > "On-chip 5 V VBUS generation is not supported. For this reason, a charge pump or,
 > **if 5 V are available on the application board, a basic power switch must be added
 > externally to drive the 5 V VBUS line.** The external charge pump can be driven by any
 > GPIO output. **This is required for host-only configuration.**"
 
-主机侧还须满足：
-- 自备 5V 电源给下游供电
-- **限流保护**（防止下游短路拉垮内部电源轨）
-- **过流检测**并上报控制器
+The host side must additionally:
+- provide its own 5V supply for the downstream device
+- **include current limiting** (so a shorted device cannot drag down the internal rails)
+- **detect overcurrent** and report it to the controller
 
-### 2.4 VBUS 检测（AN4879）
+### 2.4 VBUS detection (AN4879)
 
-PA9 是 5V 容忍引脚，但**绝对最大值不得超过 VDD + 4V**，且**禁止 MCU 未上电而 PA9 已接 5V**。
+PA9 is 5V tolerant, but its **absolute maximum is VDD + 4V**, and **the MCU must not be
+unpowered while 5V is already present on PA9**.
 
-标准分压方案（VDD 在 3.0–3.6V）：
+Standard divider (for VDD between 3.0 and 3.6V):
 
 ```
 VBUS ──[ 33kΩ ]──┬──→ PA9
@@ -153,348 +164,364 @@ VBUS ──[ 33kΩ ]──┬──→ PA9
                 GND
 ```
 
-分压后约 1.7V。
+That gives about 1.7V.
 
-> **用了分压就必须关闭外设的 VBUS 检测功能**（`OTG_GCCFG.VBDEN = 0`），
-> 改用普通 GPIO 输入读取。AN4879 原文：
+> **Once you use a divider you must disable the peripheral's VBUS sensing function**
+> (`OTG_GCCFG.VBDEN = 0`) and read PA9 as a plain GPIO input. AN4879 says:
 > "This method uses the regular GPIO functionality, the VBUS sensing function
 > (OTG_GCCFG.VBDEN), embedded in PA9, should not be enabled."
 
-**固定 Host 模式可省略整个检测**：上电即拉 EN 给 VBUS。ST 社区也有开发者确认：
-*"Even without [Drive_VBUS_HS], I can still detect my USB."*
+**A fixed Host configuration can skip detection entirely**: pull EN high at power-up and VBUS is
+always on. An ST community developer confirms: *"Even without [Drive_VBUS_HS], I can still detect
+my USB."*
 
 ---
 
-## 三、接线方案
+## 3. Wiring scheme
 
-### 3.0 关键补充：Host 模式必须外加 15kΩ 下拉（易漏）
+### 3.0 Essential addition: Host mode needs external 15kΩ pull-downs (easy to miss)
 
-**上一版遗漏项。** USB 规范中：
+**Missing from the previous revision.** In the USB specification:
 
-- **设备侧**：在 D+（全速）或 D-（低速）上拉 1.5kΩ，由设备自己加
-- **主机侧**：**必须在 D+ 和 D- 各接 15kΩ 下拉到地**
+- **Device side**: pulls 1.5kΩ up on D+ (full speed) or D- (low speed); the device adds it
+- **Host side**: **must pull D+ and D- down to ground with 15kΩ each**
 
-主机端 15kΩ 下拉的作用：
-1. 无设备接入时把总线偏置到 J 状态（idle）
-2. 主机通过检测设备侧的 1.5kΩ 上拉来识别设备速度（FS 拉 D+，LS 拉 D-）
-3. 防止总线浮空
+What the host-side 15kΩ pull-downs do:
+1. bias the bus to the J state (idle) when no device is attached
+2. let the host detect the device-side 1.5kΩ pull-up to identify speed (FS pulls D+, LS pulls D-)
+3. prevent the bus from floating
 
-SparkFun USB Host 教程原文：
+SparkFun's USB Host tutorial says:
 > "Additionally, a **15kΩ pull-down resistor is needed on each D+ and D- line**.
 > Attach one resistor from D+ to GND, and attach another from D- to GND."
 
-components101 的 USB-A 母座说明同样要求 15kΩ 下拉。
+components101's USB-A female page requires the same 15kΩ pull-downs.
 
-> STM32 的 USB 外设**内置 1.5kΩ 上拉**（那是给 Device 模式用的），
-> 但 **Host 模式所需的 15kΩ 下拉必须外加**。
-> 漏掉的表现：能检测到供电但**枚举失败 / 设备不被识别**。
+> The STM32 USB peripheral has an **integrated 1.5kΩ pull-up** (that is for Device mode),
+> but **the 15kΩ pull-downs that Host mode needs must be added externally**.
+> Symptom when omitted: power is detected but **enumeration fails / the device is not recognised**.
 
-### 3.1 完整接线表
+### 3.1 Complete wiring table
 
-| USB-A 母座 | → | STM32H723 | 备注 |
+| USB-A female | → | STM32H723 | Note |
 |---|---|---|---|
 | pin3 D+ | → | **PA12** | `OTG_HS_DP` |
 | pin2 D− | → | **PA11** | `OTG_HS_DM` |
-| pin1 VBUS | ← | 限流开关 OUT | 同时是母座 pin4 |
-| pin4 VBUS | ← | 同 pin1 | USB-A 母座内部通常短接 |
-| 外壳 | → | GND | 金属壳必须接地 |
-| GND | ↔ | 核心板 GND | 共地必需 |
+| pin1 VBUS | ← | power switch OUT | also pin4 on the receptacle |
+| pin4 VBUS | ← | same as pin1 | usually shorted inside a USB-A female |
+| shell | → | GND | the metal shell must be grounded |
+| GND | ↔ | core board GND | common ground is mandatory |
 
-**D+ / D− 各加 15kΩ 下拉到 GND**（见 3.0）。
+**Add a 15kΩ pull-down from each of D+ and D− to GND** (see 3.0).
 
-VBUS 供电与检测支路：
+VBUS supply and detection branch:
 
 ```
-核心板 5V ──► TPS2051D IN
-                 ├─ EN  ◄── 任意 GPIO（如 PB0）
-                 ├─ OC  ──► 另一 GPIO（可选，过流标志）
-                 └─ OUT ──► 母座 pin1 / pin4
+core board 5V ──► TPS2051D IN
+                 ├─ EN  ◄── any GPIO (e.g. PB0)
+                 ├─ OC  ──► another GPIO (optional, overcurrent flag)
+                 └─ OUT ──► receptacle pin1 / pin4
                           └─► [33kΩ] ──► PA9 ──► [82kΩ] ──► GND
 ```
 
-### 3.2 USB-A 母座引脚定义（已实测确认）
+### 3.2 USB-A female pinout (confirmed on the physical part)
 
-**实物确认（2026-11-19，淘宝「立式USB母座带PCB板 USB2.0母座已焊接好」，1.15 元）**：
-
-板上丝印**从上到下**依次为：
+**Confirmed on hardware (2026-11-19, "立式USB母座带PCB板 USB2.0母座已焊接好", 1.15 CNY)**:
+the silkscreen reads **top to bottom**:
 
 ```
 ┌─────────────┐
-│  GND        │  → 核心板 GND
-│  D−         │  → PA11   (+ 15kΩ 下拉到 GND)
-│  D+         │  → PA12   (+ 15kΩ 下拉到 GND)
-│  VBUS       │  ← TPS2051D OUT ← 核心板 5V
+│  GND        │  → core board GND
+│  D−         │  → PA11   (+ 15kΩ pull-down to GND)
+│  D+         │  → PA12   (+ 15kΩ pull-down to GND)
+│  VBUS       │  ← TPS2051D OUT ← core board 5V
 └─────────────┘
 ```
 
-母座金属外壳同样接 GND。
+The metal shell of the receptacle also goes to GND.
 
-> 该型号丝印清晰、方向明确，无需再实测。
-> 若换用其他型号的转接板，仍需确认：USB-A 母座标准为
-> pin1=VBUS / pin2=D− / pin3=D+ / pin4=GND或VBUS（厂家不同）。
+> This particular part has clear, unambiguous silkscreen, so no further measurement is needed.
+> If you switch to a different breakout, still check: the USB-A standard is
+> pin1=VBUS / pin2=D− / pin3=D+ / pin4=GND or VBUS (varies by vendor).
 
-**下单备注**：若买不到同款，建议选「USB-A 母座带 PCB」并在下单时问商家
-"四个引脚从上到下的顺序是什么"。
+**Note when ordering**: if this exact part is unavailable, pick a "USB-A female with PCB" and
+ask the seller "what is the order of the four pins from top to bottom?".
 
-### 3.3 限流开关选型
+### 3.3 Current-limited switch selection
 
-| 器件 | 封装 | 电流 | 说明 |
+| Part | Package | Current | Note |
 |---|---|---|---|
-| **TPS2051B/D** | SOT-23-5 / SOIC-8 | 0.5A 连续，0.7–1.2A 限流 | 最常见，OC 为低有效开漏输出 |
-| TPS22919 类负载开关 | SOT-23-6 | 限流内置 | 更小，无独立 OC |
-| P-MOS + 限流电阻 | 分立 | 需自设计 | 成本最低但过流保护简陋 |
+| **TPS2051B/D** | SOT-23-5 / SOIC-8 | 0.5A continuous, 0.7–1.2A limit | Most common; OC is an active-low open-drain output |
+| TPS22919-style load switch | SOT-23-6 | limit built in | Smaller, no separate OC |
+| P-MOS + current sense resistor | discrete | design your own | Cheapest, but overcurrent protection is crude |
 
-TPS2051 典型接法：`VIN` ← 5V，`OUT` → VBUS，`EN` ← GPIO（逻辑高导通），
-`OC` → GPIO（低有效开漏，需上拉），输入 0.1µF / 输出 10µF 去耦。
+Typical TPS2051 wiring: `VIN` ← 5V, `OUT` → VBUS, `EN` ← GPIO (high = on),
+`OC` → GPIO (active-low open drain, needs a pull-up), 0.1µF input / 10µF output decoupling.
 
-**注意反向电流**：TPS2051B 支持 OUT→IN 反向流动但**不带限流**。
-若母座侧可能由外部供电，需并联二极管或改用双向方案。
+**Watch out for reverse current**: TPS2051B allows OUT→IN current flow but **does not limit it**.
+If the receptacle side might be externally powered, add a parallel diode or use a bidirectional part.
 
-### 3.4 物料清单（USB Host 最小可用，已核实）
+### 3.4 Bill of materials (minimum viable USB Host, verified)
 
-| 物料 | 数量 | 参考价 | 备注 |
+| Item | Qty | Approx. price | Note |
 |---|---|---|---|
-| USB-A 母座带 PCB（立式，USB2.0） | 1 | 1.15 元 | **已确认型号**，丝印 GND/D−/D+/VBUS 自上而下 |
-| TPS2051D（SOT-23-5） | 1 | ~1 元 | VBUS 限流 + 过流 |
-| **15kΩ 电阻** | **2** | ~0.1 元 | **D+ / D- 下拉，必需** |
-| 33kΩ / 82kΩ 电阻 | 各 1 | ~0.1 元 | VBUS 检测（固定 Host 可省） |
-| 0.1µF + 10µF 电容 | 各 1 | ~0.2 元 | 开关去耦 |
-| USB-A 公对公线 | 1 | 已有 | 接鼠标 |
+| USB-A female with PCB (vertical, USB2.0) | 1 | 1.15 CNY | **Confirmed model**, silkscreen GND/D−/D+/VBUS top to bottom |
+| TPS2051D (SOT-23-5) | 1 | ~1 CNY | VBUS limiting + overcurrent |
+| **15kΩ resistor** | **2** | ~0.1 CNY | **D+ / D- pull-downs, mandatory** |
+| 33kΩ / 82kΩ resistor | 1 each | ~0.1 CNY | VBUS detection (optional for a fixed Host) |
+| 0.1µF + 10µF capacitor | 1 each | ~0.2 CNY | switch decoupling |
+| USB-A male-to-male cable | 1 | have it | to the mouse |
 
-**总计约 3 元。**
+**Total about 3 CNY.**
 
-> **待确认**：核心板是否引出 **5V**？母座 VBUS 需要 5V 源。
-> 若 5V 仅用于 LCD 背光且未引至排针，需从 5V 测试点飞线，
-> 或加 3.3V→5V 升压模块（约 1 元）。
+> **To be confirmed**: does the core board break out **5V**? The receptacle VBUS needs a 5V source.
+> If 5V only feeds the LCD backlight and is not on a header, fly a wire from the 5V test point,
+> or add a 3.3V→5V boost module (about 1 CNY).
 
-### 3.5 电容选型（本项目专用）
+### 3.5 Capacitor selection (specific to this project)
 
-**结论：用 MLCC（独石/贴片陶瓷），材质 X7R 或 X5R，耐压 ≥10V。**
+**Conclusion: use MLCC (monolithic/surface-mount ceramic), dielectric X7R or X5R, voltage rating
+≥ 10V.**
 
-| 类型 | 特性 | VBUS 去耦表现 | 结论 |
+| Type | Characteristics | Performance as VBUS decoupling | Verdict |
 |---|---|---|---|
-| **独石/贴片 MLCC** | 陶瓷介质，ESR 极低，漏电流近零 | **最好**，能吸收 USB 插拔瞬态 | ✅ **用这个** |
-| 瓷片电容（引脚式） | 同为陶瓷但体积大、ESL 高、容量难做大 | 勉强可用，寄生参数难看 | ⚠️ 备选 |
-| 铝电解电容 | 容量大、**ESR 高**、有极性、漏电流大、寿命有限 | **不适合高频去耦**，仅适合储能 | ⚠️ 仅大容量场合 |
+| **Monolithic/SMD MLCC** | ceramic dielectric, extremely low ESR, near-zero leakage | **Best**, absorbs USB hot-plug transients | ✅ **Use this** |
+| Ceramic disc capacitor (leaded) | also ceramic, but bulky, high ESL, hard to get large values | usable, ugly parasitics | ⚠️ Fallback |
+| Aluminium electrolytic | large capacity, **high ESR**, polarised, leaky, finite life | **Unsuitable for high-frequency decoupling**, only for bulk energy | ⚠️ Large capacities only |
 
-**关键差异**：铝电解 ESR 高 ⇒ 对高频瞬态（USB 插拔浪涌）响应慢。
-USB 去耦必须靠低 ESR 的陶瓷。
+**The key difference**: high ESR in aluminium electrolytics ⇒ slow response to high-frequency
+transients (USB hot-plug inrush). USB decoupling must rely on low-ESR ceramic.
 
-#### 3.5.1 MLCC 直流偏压降容（最容易踩的坑）
+#### 3.5.1 MLCC DC-bias derating (the easiest pitfall to hit)
 
-X7R/X5R 材质的 MLCC 在直流偏压下**实际容量大幅下降**（介电常数随电场下降，固有物理特性，非质量问题）。
+X7R/X5R MLCCs lose a lot of real capacitance under DC bias (the dielectric constant falls with
+electric field — inherent physics, not a quality problem).
 
-0805 封装典型实测：
+Typical measured figures, 0805 package:
 
-| 标称 | 耐压 | 施加 5V 后实际容量 |
+| Nominal | Rating | Actual capacitance at 5V |
 |---|---|---|
-| 10µF | 6.3V | **仅剩 2–4µF**（掉 60%+） |
-| 10µF | 16V | 约 6–8µF |
-| 10µF | 25V | 约 8–9µF |
+| 10µF | 6.3V | **only 2–4µF left** (more than 60% gone) |
+| 10µF | 16V | about 6–8µF |
+| 10µF | 25V | about 8–9µF |
 
-**规则：接 5V 的电容，耐压必须 ≥10V。**
-**禁用 Y5V / Z5U 材质**（降容更狠，6.3V 的可能只剩 20%）。
+**Rule: a capacitor connected to 5V must be rated ≥ 10V.**
+**Never use Y5V / Z5U** (they derange even harder — a 6.3V part can be down to 20%).
 
-#### 3.5.2 本项目电容采购表
+#### 3.5.2 Capacitor purchase table for this project
 
-| 用途 | 容量 | 耐压 | 材质 | 封装 | 数量 |
+| Purpose | Value | Rating | Dielectric | Package | Qty |
 |---|---|---|---|---|---|
-| 开关输入去耦 | 0.1µF (100nF) | ≥16V | X7R | 0603/0805 | 2 |
-| 开关输出储能 | 10µF | **≥16V** | X7R 或 X5R | 0805/1206 | 2 |
-| （可选）VBUS 稳压 | 100µF | 10V | **铝电解** | Φ6×11 | 1 |
+| Switch input decoupling | 0.1µF (100nF) | ≥16V | X7R | 0603/0805 | 2 |
+| Switch output bulk | 10µF | **≥16V** | X7R or X5R | 0805/1206 | 2 |
+| (optional) VBUS stabilisation | 100µF | 10V | **aluminium electrolytic** | Φ6×11 | 1 |
 
-- 0.1µF 用 0603 足够 —— USB 走线自带分布电容，**位置贴近芯片引脚比容量更重要**
-- 10µF 用 0805 + **16V**（勿用 6.3V）
-- 100µF 铝电解可选：让 VBUS 在短时掉电/浪涌时更"硬"，防鼠标瞬时掉电复位。
-  USB 规范对 VBUS 电容有 **120µF 上限**（防浪涌电流过大烧主机），100µF 在范围内。
-  **不加也能工作**，加了更稳。
+- 0.1µF in 0603 is enough — the USB traces already carry stray capacitance, and **placement
+  close to the chip pins matters more than the value**
+- 10µF in 0805 with **16V** (not 6.3V)
+- The 100µF electrolytic is optional: it makes VBUS "harder" during a brief droop or inrush,
+  preventing the mouse from resetting. The USB specification caps VBUS capacitance at
+  **120µF** (to avoid burning the host with inrush current); 100µF is within that.
+  **It works without it, but it is steadier with it.**
 
-#### 3.5.3 焊接注意
+#### 3.5.3 Soldering notes
 
-- TPS2051D 为 SOT-23-5，烙铁 ≤320℃，单颗几秒完成
-- 电解电容**有极性**，长脚为正；接反会鼓包甚至爆
-- 两个 15kΩ 下拉电阻直接焊在母座板背面（D+/D− 到 GND），省去飞线
+- TPS2051D is SOT-23-5; keep the iron at ≤320°C, a few seconds per part
+- The electrolytic is **polarised** — the long leg is positive; reversed it bulges and can burst
+- Solder the two 15kΩ pull-downs straight onto the back of the receptacle board (D+/D− to GND)
+  and skip the flying wires
 
+**Or** buy a "USB OTG Host adapter board (with TPS2051 + USB-A female)", 8–15 CNY, and solder
+only four wires.
 
-**或**直接买「USB OTG Host 扩展板（含 TPS2051 + USB-A 母座）」，~8–15 元，只焊 4 根线。
+### 3.6 The reality of the software stack
 
-### 3.5 软件栈的现实
-
-| 路线 | 工作量 | 风险 |
+| Route | Effort | Risk |
 |---|---|---|
-| Rust 全自研 USB Host | 大 | 枚举、端点调度、描述符解析坑多 |
-| ST 的 C 库 + Rust FFI | 中 | 引入 C 依赖，破坏"纯 Rust + 可验证"叙事 |
-| **先用串口，后面再说** | **零** | 无 |
+| Write the whole USB Host stack in Rust | large | enumeration, endpoint scheduling and descriptor parsing are full of traps |
+| ST's C library + Rust FFI | medium | introduces a C dependency, which breaks the "pure Rust + verifiable" story |
+| **Use serial first, revisit later** | **zero** | none |
 
-ST 的 USB Host 类驱动（UM1720 `USB_Host_Library/Class`）全部是 C 实现：
+ST's USB Host class drivers (UM1720 `USB_Host_Library/Class`) are all C:
 `usbh_hid.c` / `usbh_hid_parser.c` / `usbh_hid_mouse.c` / `usbh_hid_keybd.c` /
-`usbh_msc.c` / `usbh_cdc.c`。
-
+`usbh_msc.c` / `usbh_cdc.c`.
 
 ---
 
-## 四、三个坑
+## 4. Three pitfalls
 
-### 坑 1：剪 Type-C 转接头时的二极管
+### Pitfall 1: the diode inside a cut-up Type-C adapter
 
-Type-C 转 USB-A 的 OTG 适配器（手机接鼠标用的那种）内部走线：
+Internal routing of a Type-C to USB-A OTG adapter (the kind you plug a mouse into a phone with):
 
 ```
 USB-A pin3 (D+) ──► Type-C TX1 (A6/B6)
 USB-A pin2 (D−) ──► Type-C RX1 (A7/B7)
-USB-A pin1/4 (VBUS) ──► [可能有肖特基二极管] ──► Type-C VBUS (A4/A9/B4/B9)
+USB-A pin1/4 (VBUS) ──► [possibly a Schottky diode] ──► Type-C VBUS (A4/A9/B4/B9)
 ```
 
-**Type-C 侧还带 CC1/CC2 下拉电阻（Rd 5.1kΩ）**——手机用它判断"我是从设备，请给我供电"。
+**The Type-C side also carries CC1/CC2 pull-downs (Rd 5.1kΩ)** — that is how a phone tells
+"I am a device, please supply me with power".
 
-剪开 Type-C 那一头后可作 USB-A 引出线使用，但：
+Cutting off the Type-C end gives you a usable USB-A pigtail, but:
 
-> **必须用万用表量 VBUS 路径的通断。**
-> 若二极管在，电流方向被挡住，外部 5V 无法进入母座 VBUS —— 表现为"鼠标不亮"。
-> 需短接该二极管。
+> **Measure the continuity of the VBUS path with a multimeter.**
+> If the diode is there, current is blocked in that direction and external 5V cannot reach the
+> receptacle VBUS — the symptom is "the mouse does not light up". Short the diode out.
 
-**更干净的做法：直接买 4 脚 USB-A 母座**，避开二极管、CC 电阻、TX/RX 映射全部疑虑。
+**The cleaner approach: buy a 4-pin USB-A female directly**, which sidesteps the diode, the CC
+resistors and the TX/RX mapping question entirely.
 
-**注意**：Type-C 转 USB-A 适配器**没有 USB Host 供电能力**，
-它只是数据转接，VBUS 需要外部提供。
+**Note**: a Type-C to USB-A adapter **has no USB Host supply capability** — it is a data
+adapter, VBUS must be provided externally.
 
-### 坑 2：PA11/PA12 可能已被 CAN 占用
+### Pitfall 2: PA11/PA12 may already be taken by CAN
 
-正点原子阿波罗 H7（STM32H743）的引脚分配（来自开源项目 BRINGUP.md）：
+Pin assignment of a well-known STM32H743 board (from an open-source project's BRINGUP.md):
 
 ```
 CAN1   PA11 RX / PA12 TX, 500 kbit/s
-调试串口 USART1  PA9 TX / PA10 RX, 115200
+debug serial USART1  PA9 TX / PA10 RX, 115200
 ```
 
-**PA11/PA12 一旦被 CAN 占用，USB 就用不了。**
-动线前必须查手上这块核心板的原理图确认。
+**If PA11/PA12 are taken by CAN, USB cannot be used at all.**
+Always check the schematic of the board actually in your hands before routing wires.
 
-同理 **PA9 常被用作 USART1_TX**（调试口），若要拿 PA9 做 VBUS 检测，
-调试串口需换到其他引脚（如 PA2/PA3）。
+Likewise **PA9 is commonly USART1_TX** (the debug console), so if PA9 is needed for VBUS
+detection, the debug serial has to move to other pins (e.g. PA2/PA3).
 
-### 坑 3：48MHz 时钟精度
+### Pitfall 3: 48MHz clock accuracy
 
-见 2.2。**必须走 PLL，HSI48 不够准。**
+See 2.2. **The PLL is mandatory — HSI48 is not accurate enough.**
 
 ---
 
-## 五、ST 官方双角色范例（NUCLEO-H723ZG）
+## 5. ST's official dual-role example (NUCLEO-H723ZG)
 
-ST 社区文章《How to configure STM32 as USB dual role》要点：
+Key points of the ST community article "How to configure STM32 as USB dual role":
 
-- 验证平台正是 **NUCLEO-H723ZG**
-- CubeMX **不原生支持双角色**，需建两个工程（Host 与 Device）再手工拷贝文件互用
-- Host 工程配置：`USB_OTG_HS` → Host only（内部 FS PHY）→ Activate VBUS
-- **Platform Settings** 里 `Drive_VBUS_HS` 需指定 GPIO（否则生成时弹警告，
-  且不会生成 `usbh_platform.c`）
-- 该文章用 USB 2.0 A-type female 转 micro-B male 线连接
+- The validation platform is exactly **NUCLEO-H723ZG**
+- CubeMX **does not natively support dual role** — you need two projects (Host and Device) and
+  copy files between them by hand
+- Host project configuration: `USB_OTG_HS` → Host only (internal FS PHY) → Activate VBUS
+- In **Platform Settings**, `Drive_VBUS_HS` must be given a GPIO (otherwise a warning pops up
+  during generation and `usbh_platform.c` is not produced)
+- The article connects with a USB 2.0 A-type female to micro-B male cable
 
-配套的 USB Host 类驱动在 STM32Cube USB 中提供：
+The matching USB Host class drivers shipped with STM32Cube USB:
 
-| 类 | 文件 |
+| Class | File |
 |---|---|
-| HID 鼠标与键盘 | `usbh_hid.c` / `usbh_hid_parser.c` / `usbh_hid_mouse.c` / `usbh_hid_keybd.c` |
-| 大容量存储 | `usbh_msc.c` |
-| CDC 虚拟串口 | `usbh_cdc.c` |
+| HID mouse and keyboard | `usbh_hid.c` / `usbh_hid_parser.c` / `usbh_hid_mouse.c` / `usbh_hid_keybd.c` |
+| Mass storage | `usbh_msc.c` |
+| CDC virtual serial port | `usbh_cdc.c` |
 
-**参考坐标**：该范例在 NUCLEO 上完成，说明协议栈可行性已被官方验证；
-核心板的增量工作是**供电电路 + 连接器**，协议栈工作量与 Nucleo 相同。
+**Reference point**: because this example was completed on a NUCLEO, the feasibility of the
+protocol stack is officially validated. The incremental work for a core board is the **power
+circuit and the connector** — the protocol stack effort is identical to the Nucleo's.
 
 ---
 
-## 六、显示相关（ST7789 与 N647）
+## 6. Display (ST7789 and the N647)
 
-### 6.1 ST7789 无 CLUT
+### 6.1 The ST7789 has no CLUT
 
-COLMOD (0x3A) 仅支持 **12/16/18 位**（RGB444 / RGB565 / RGB666），
-**无 indexed 模式、无 CLUT 寄存器**。
+COLMOD (0x3A) supports only **12/16/18 bits** (RGB444 / RGB565 / RGB666),
+with **no indexed mode and no CLUT register**.
 
-⇒ L8 帧缓冲不能直驱，必须先展开为 RGB565：
-- DMA2D 支持 indexed → RGB565 像素格式转换（硬件）
-- SPI 带宽瓶颈：240×320×2 = 153KB/帧，SPI 40MHz ≈ 5MB/s ⇒ **全屏刷新约 30ms**
-- ST7789 的 GRAM + CASET(0x2A)/RASET(0x2B) 窗口机制可只刷脏矩形以缓解
+⇒ An L8 framebuffer cannot drive it directly; it must be expanded to RGB565 first:
+- DMA2D supports indexed → RGB565 pixel format conversion (in hardware)
+- **SPI bandwidth is the limit**: 240×320×2 = 153KB per frame, SPI 40MHz ≈ 5MB/s
+  ⇒ **a full-screen refresh takes about 30ms**
+- The ST7789's GRAM plus the CASET(0x2A)/RASET(0x2B) window mechanism allow refreshing only
+  dirty rectangles, which mitigates this
 
-其他要点：
-- 窗口地址必须用 CASET/RASET 设置，否则可能溢出显示区（表现为滚动条纹）
-- 部分模组的物理原点不在 GRAM (0,0)（如 1.14 寸需从第 40 列起），
-  优先用 CASET/RASET 加偏移，而非改 porch 寄存器
-- COLMOD 配 0x05（16bit）+ RAMCTRL 低两位为 0 = RGB565 **大端序**（先高字节）
-- 屏幕红蓝互换 → 查 MADCTL 的 RGB 位；绿块有水平细条纹 → 查字节序
+Other points:
+- The window address must be set with CASET/RASET, otherwise data can spill past the visible
+  area (shows up as scrolling stripes)
+- On some modules the physical origin is not GRAM (0,0) (a 1.14" panel may start at column 40).
+  Prefer adding an offset in CASET/RASET over changing the porch registers
+- COLMOD = 0x05 (16-bit) with the low two bits of RAMCTRL = 0 means RGB565 **big endian**
+  (high byte first)
+- Red/blue swapped → check the RGB bit in MADCTL; green blocks with horizontal stripes → check
+  the byte order
 
-### 6.2 LTDC 原生支持 L8 + 每层 CLUT
+### 6.2 LTDC natively supports L8 + a per-layer CLUT
 
-STM32 LTDC 手册（适用 H7 / N6）：
+STM32 LTDC manual (applies to H7 / N6):
 
 > "**Color look-up table (CLUT) up to 256 colors (256x24-bit) per layer**"
 >
-> 输入像素格式含 "**L8 (8-bit luminance or CLUT)**"、AL44、AL88
+> Input pixel formats include "**L8 (8-bit luminance or CLUT)**", AL44, AL88
 
-- CLUT 通过 `LTDC_LxCLUTWR` 逐层写入，**每层独立**
-- LTDC 直接从 L8 帧缓冲读索引、硬件 CLUT 展开送屏，**CPU 零参与，无需 DMA2D 参与**
-- AL44 格式只需加载 16 个颜色，索引按 4 位 L 通道重复为 8 位填充
-  （L0→0x00，L1→0x11，L2→0x22，…… L15→0xFF）
+- The CLUT is written per layer through `LTDC_LxCLUTWR`, **each layer independent**
+- The LTDC reads indices straight out of the L8 framebuffer and expands them with the hardware
+  CLUT: **zero CPU involvement, no DMA2D participation needed**
+- The AL44 format only needs 16 colours loaded, with the index filled by repeating the 4-bit L
+  channel into 8 bits (L0→0x00, L1→0x11, L2→0x22, … L15→0xFF)
 
-### 6.3 两条显示路径的对照
+### 6.3 Comparison of the two display paths
 
 | | H723 + ST7789 | N647 + 4.3" RGB LCD |
 |---|---|---|
-| 总线 | SPI（CPU/DMA 推像素） | 并行 RGB（LTDC 扫出） |
-| L8 + CLUT | ✗ 需软件展开 | ✓ 硬件原生 |
-| 刷屏 CPU 占用 | 高 | **零** |
-| 触摸 | ✗ | ✓ GT911（I2C + 外部中断，5点，免校准） |
-| 实时性影响 | **有**（总线竞争） | **几乎无** |
-| 内存 | 150KB 双缓冲 / 564KB RAM | **768KB** 双缓冲 / 4.2MB + 32MB HyperRAM |
+| Bus | SPI (CPU/DMA pushes pixels) | parallel RGB (LTDC scans out) |
+| L8 + CLUT | ✗ needs software expansion | ✓ **native in hardware** |
+| CPU cost of a screen refresh | high | **zero** |
+| Touch | ✗ | ✓ GT911 (I2C + external interrupt, 5 points, no calibration needed) |
+| Effect on real-time behaviour | **yes** (bus contention) | **almost none** |
+| Memory | 150KB double buffered / 564KB RAM | **768KB** double buffered / 4.2MB + 32MB HyperRAM |
 
-### 6.4 N6 额外图形硬件
+### 6.4 Extra graphics hardware on the N6
 
-- **Chrom-GRC (GFXMMU)**：可编程显示形状，只物理存储可见像素，4 个虚拟缓冲
-- **Neo-Chrom GPU2D**：支持 L8、CLUT(256条目)、ARGB8888、RGB565/888 等；
-  命令列表驱动 DMA，CPU 开销极低
-- ST 官方：4.2MB RAM "could store a double frame buffer for a 1280 x 800 display"
+- **Chrom-GRC (GFXMMU)**: programmable display shape, physically stores only the visible pixels,
+  4 virtual buffers
+- **Neo-Chrom GPU2D**: supports L8, CLUT (256 entries), ARGB8888, RGB565/888 and more;
+  command-list driven DMA, so CPU overhead is very low
+- ST's own words: 4.2MB of RAM "could store a double frame buffer for a 1280 x 800 display"
 
-### 6.5 显示缓存与内存位置（跨平台通用）
+### 6.5 Display memory and placement (applies across platforms)
 
-- **帧缓冲必须标 Non-Cacheable**（MPU 配置）。
-  ST 笔记 DM00272913 列出四种解法；社区实测 TouchGFX 混用 AXI(write-through) +
-  SDRAM(write-back) 即便把 cache 维护限制到帧缓冲范围**仍出现鬼影与 HardFault**。
-  ⇒ 选 Non-Cacheable。
-- **帧缓冲不能放 DTCM**：DMA1/DMA2 在 D2 域，访问不到 ITCM/DTCM（0x20000000），
-  只有 MDMA（D1 域）可以。
-- **LTDC 图层显存起始地址必须 16 字节对齐**，建议 32 字节对齐
-  （cache line 为 32 字节，可避开 cache 维护的粒度陷阱）。
-
----
-
-## 七、待办与决策记录
-
-| 项 | 状态 |
-|---|---|
-| USB Host 硬件 | **推迟**。P0–P2 阶段用串口 CLI + 以太网 Web，不需要鼠标 |
-| USB Host 输入抽象 | **现在就定死** `InputEvent` 统一事件流，加鼠标/触摸只是多一个 Source，UI 零改动 |
-| H723 核心板引脚占用 | **待查**：PA11/PA12 是否被 CAN1 占用、PA9 是否被调试串口占用 |
-| 以太网 | 若核心板带 PHY + RJ45（如阿波罗 H7 用 YT8512C/DP83848），插线即可，无需额外硬件 |
+- **The framebuffer must be marked Non-Cacheable** (MPU configuration).
+  ST note DM00272913 lists four approaches; a community measurement with TouchGFX mixing
+  AXI (write-through) and SDRAM (write-back) still produced **ghosting and HardFault** even
+  with cache maintenance restricted to the framebuffer.
+  ⇒ Choose Non-Cacheable.
+- **The framebuffer must not live in DTCM**: DMA1/DMA2 sit in the D2 domain and cannot reach
+  ITCM/DTCM (0x20000000); only MDMA (D1 domain) can.
+- **LTDC layer framebuffer start address must be 16-byte aligned**, 32 bytes is better
+  (the cache line is 32 bytes, which avoids the granularity trap in cache maintenance).
 
 ---
 
-## 八、引用来源
+## 7. Open items and decision log
 
-| 结论 | 来源 |
+| Item | Status |
 |---|---|
-| H723 USB 能力与引脚 | DS13313 数据手册 3.x、AN4879 |
-| Nucleo CN13 引脚与 USB 焊桥 | UM2407《STM32H7 Nucleo-144 boards (MB1364)》Table 12 / Table 16 |
-| 板上 VBUS 开关由 PD10 控制、PG7 报过流 | MB1364 原理图（deepbluembedded 拆解） |
-| VBUS 必须外接电源开关 | ST 社区《Warning during STM3CubeMX setting in USB_HOST》 |
-| 分压检测与 VBDEN 禁用 | AN4879《Introduction to USB hardware and PCB guidelines for STM32 MCUs》2.6 节 |
-| VBUS 限流开关要求 | TI TPS2051B-Q1 数据手册 9.2.2 节 |
-| 双角色官方范例 | ST 社区《How to configure STM32 as USB dual role》 |
-| USB Host HID 类驱动清单 | UM1720《STM32Cube USB》 |
-| ST7789 色彩格式与窗口机制 | ST7789V 手册、多个驱动实现案例 |
-| **Host 模式需 15kΩ 下拉** | SparkFun《USB Type A Female Breakout Hookup Guide》、components101 USB-A 母座页 |
-| USB-A 母座 pinout | components101《USB Type-A (Female) Connector》、ARIAT Tech breakout 说明 |
-| LTDC 的 L8 与 CLUT | STM32 LTDC 手册、wiki.st.com LTDC 特性页 |
-| D-Cache 一致性四种解法 | DM00272913《Level 1 cache on STM32F7/H7 series》 |
-| DMA 访问不到 DTCM、鬼影案例 | ST 社区《DMA is not working on STM32H7 devices》《Granular D-Cache maintenance operations...》 |
-| N647 板载 4.3 寸 RGB LCD + GT911 | 正点原子 N647 官方 wiki、ATK-MD0430R 模块仓库 |
-| N6 的 Chrom-GRC / Neo-Chrom | STM32N647xx 数据手册 3.12 / 3.30 章节 |
-| PA11/PA12 被 CAN 占用 | cgzjs/stm32h743-industrial-gateway BRINGUP.md |
+| USB Host hardware | **Deferred**. The P0–P2 phases use the serial CLI and Ethernet web; no mouse needed |
+| USB Host input abstraction | **Fix it now**: a unified `InputEvent` stream, so adding a mouse or touch is just another Source with zero UI changes |
+| H723 core board pin usage | **To check**: is PA11/PA12 taken by CAN1, is PA9 taken by the debug serial |
+| Ethernet | If the core board carries a PHY + RJ45 (some STM32H743 boards use YT8512C / DP83848), a cable is all it takes — no extra hardware |
+
+---
+
+## 8. Sources
+
+| Conclusion | Source |
+|---|---|
+| H723 USB capabilities and pins | DS13313 datasheet section 3.x, AN4879 |
+| Nucleo CN13 pinout and USB solder bridges | UM2407《STM32H7 Nucleo-144 boards (MB1364)》Table 12 / Table 16 |
+| On-board VBUS switch driven by PD10, PG7 reports overcurrent | MB1364 schematic (deepbluembedded teardown) |
+| VBUS requires an external power switch | ST community《Warning during STM3CubeMX setting in USB_HOST》 |
+| Divider detection and disabling VBDEN | AN4879《Introduction to USB hardware and PCB guidelines for STM32 MCUs》section 2.6 |
+| VBUS current-limited switch requirements | TI TPS2051B-Q1 datasheet section 9.2.2 |
+| Official dual-role example | ST community《How to configure STM32 as USB dual role》 |
+| USB Host HID class driver list | UM1720《STM32Cube USB》 |
+| ST7789 colour format and window mechanism | ST7789V manual, several driver implementations |
+| **Host mode needs 15kΩ pull-downs** | SparkFun《USB Type A Female Breakout Hookup Guide》, components101 USB-A female page |
+| USB-A female pinout | components101《USB Type-A (Female) Connector》, ARIAT Tech breakout description |
+| LTDC L8 and CLUT | STM32 LTDC manual, wiki.st.com LTDC feature page |
+| Four approaches for D-Cache coherency | DM00272913《Level 1 cache on STM32F7/H7 series》 |
+| DMA cannot reach DTCM, ghosting case | ST community《DMA is not working on STM32H7 devices》《Granular D-Cache maintenance operations...》 |
+| N647 on-board 4.3" RGB LCD + GT911 | board vendor's official wiki, ATK-MD0430R module repository |
+| N6 Chrom-GRC / Neo-Chrom | STM32N647xx datasheet sections 3.12 / 3.30 |
+| PA11/PA12 taken by CAN | cgzjs/stm32h743-industrial-gateway BRINGUP.md |

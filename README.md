@@ -1,175 +1,207 @@
-# Zay
+# ZayGO
 
-> 面向高性能 MCU 的实时平台：**应用集固定、分级可扩展、整体可验证**。
+> English version. [中文版](README.zh-CN.md)
+>
+> A real-time platform for high-performance MCUs: **fixed application set, tiered extensibility,
+> verifiable as a whole.**
 
-不是第四个通用 RTOS。它要解决的问题是：**把「可预测性」从一句文档里的承诺，变成内核里可检查、可取证、不依赖外部工具的事实**。
+Not the fourth general-purpose RTOS. What it tries to solve is turning **predictability** from a
+promise in a document into a property the kernel itself can check, can produce evidence for, and
+does not need an external tool to verify.
 
-> 状态：**P0 完成并上板验证**。代码能跑、机器码已逐条核对、时序数据已采集。
-> 每一节都标了「已验证 / 未验证」，完整阶段表见 [`PLAN.md`](PLAN.md)。
-
----
-
-## 目录
-
-- [它不打算做什么](#它不打算做什么)
-- [为什么需要它](#为什么需要它)
-- [四条约束怎么叠加](#四条约束怎么叠加)
-- [实测数据](#实测数据)
-- [现在到哪一步了](#现在到哪一步了)
-- [快速开始](#快速开始)
-- [目录结构](#目录结构)
-- [文档](#文档)
+> Status: **P0 complete and verified on hardware.** The code runs, the machine code has been
+> checked instruction by instruction, and timing data has been collected.
+> Every section marks what is **verified** and what is **not**. The full phase table is in
+> [`PLAN.md`](PLAN.md).
 
 ---
 
-## 它不打算做什么
+## Contents
 
-先把边界划清楚，否则会被拿去和 Zephyr 比驱动数量、和 seL4 比证明规模，然后必然输。
+- [What it is not](#what-it-is-not)
+- [Why it is needed](#why-it-is-needed)
+- [How four constraints combine](#how-four-constraints-combine)
+- [Measured results](#measured-results)
+- [Where the project stands](#where-the-project-stands)
+- [Quick start](#quick-start)
+- [Directory layout](#directory-layout)
+- [Documents](#documents)
 
-| 不做 | 为什么 |
+---
+
+## What it is not
+
+Drawing the boundary first, otherwise it gets compared to Zephyr on driver count and to seL4 on
+proof size, and loses both times.
+
+| Not doing | Why |
 |---|---|
-| 不做全功能 POSIX | 通用性来自**内置应用 + 声明式模板**，不来自能装任意程序 |
-| 不追驱动生态广度 | 1000+ 板子需要千人年，这不是一个人的项目能赢的赛道 |
-| 不做全内核形式化证明 | seL4 用了二十年；本项目只验证调度器核心不变式 |
-| 不提供运行时安装原生代码 | 这是可预测性的前提，不是妥协（见下节） |
+| No full POSIX | Generality comes from **built-in applications plus declarative templates**, not from being able to install arbitrary programs |
+| Not chasing driver breadth | 1000+ boards take thousands of person-years; that is not a race one person can win |
+| No full-kernel formal verification | seL4 took twenty years; this project verifies only the scheduler's core invariants |
+| No runtime loading of native code | That is a precondition for predictability, not a compromise (see below) |
 
-**它要做的**：让「这个任务一定不会超期」变成能在编译期和运行期都被检查、且能留下证据的东西。
+**What it does aim for**: making "this task will not miss its deadline" something that can be
+checked at build time and at run time, and that leaves evidence behind.
 
 ---
 
-## 为什么需要它
+## Why it is needed
 
-三个参照项目不是同质竞品，是三种互斥的取舍。各自的缺口都是真实的：
+The three reference projects are not homogeneous competitors; they are three mutually exclusive
+trade-offs. Each one's gap is real:
 
 | | Zephyr 4.5 | seL4 16.0 | NuttX 13.1 |
 |---|---|---|---|
-| 取向 | 广度优先 | 正确性优先 | POSIX 完整度优先 |
-| 规模 | 1000+ 板、11 架构、单版本 1200+ 贡献者 | 平台少，工具链全套 | 300+ 板、1500+ 配置模板 |
-| 时序保证 | **无** | 内核 WCET 有验证，**不含驱动与应用** | 无 |
-| 形式化 | 无 | 功能正确性 + 完整性 + 保密性（AArch64 齐） | 无 |
+| Orientation | breadth first | correctness first | POSIX completeness first |
+| Scale | 1000+ boards, 11 architectures, 1200+ contributors in one release | few platforms, full tooling | 300+ boards, 1500+ config templates |
+| Timing guarantee | **none** | kernel WCET is verified, **drivers and applications are not** | none |
+| Formal verification | none | functional correctness + integrity + confidentiality (AArch64 complete) | none |
 
-Zephyr 官方 `include/kernel.h` 里 `k_thread_deadline_set()` 的注释是自证的：
+Zephyr's own `include/kernel.h` says it plainly in the documentation for `k_thread_deadline_set()`:
 
 > "Despite the API naming, the scheduler makes **no guarantees** the thread WILL be scheduled within that deadline,
 > nor does it take extra metadata (like e.g. the 'runtime' and 'period' parameters in Linux `sched_setattr()`)
 > that allows the kernel to validate the scheduling for achievability."
 
-UCSB 2026 年的论文说得更直接：
+A 2026 paper from UCSC puts it even more bluntly:
 
 > "The Zephyr RTOS... **provides no guarantees at all on timing** other than experimental benchmarks."
 
-三类缺口由此暴露：
+Three gaps follow from this:
 
-1. **通用性与可预测性之间没有调和机制** —— 准入控制、静态分区、静态时序分析，MCU 侧一个成熟开源实现都没有。
-2. **「可验证且够用」的中间地带空着** —— seL4 太重，NuttX 不验，Zephyr 不保时序。
-3. **混合临界性没有工程化实现** —— 同一颗 MCU 上跑 µs 级控制回路 + ms 级 UI/网络，工业 RTOS 只有"基础件"。
+1. **No reconciliation mechanism between generality and predictability** — admission control,
+   static partitioning and static timing analysis have no mature open-source MCU implementation.
+2. **The "verifiable but sufficient" middle ground is empty** — seL4 is too heavy, NuttX is not
+   verified, Zephyr does not guarantee timing.
+3. **Mixed-criticality has no engineering implementation** — running a µs-scale control loop
+   alongside a ms-scale UI and network stack on one MCU is a real industrial need, and industrial
+   RTOSes only offer "basic support".
 
 ---
 
-## 四条约束怎么叠加
+## How four constraints combine
 
-「通用 + 实时 + 可靠 + 可预测」同时要会得到四不像。解法不是把每个都做满，而是**让它们各自靠一个机制成立，四个机制叠加**。
+Asking for generality, real-time performance, reliability and predictability at once yields
+nothing coherent. The answer is not to maximise each one but to let **each stand on its own
+mechanism, with the four mechanisms stacked**:
 
-| 目标 | 靠什么实现 | 当前状态 |
+| Goal | Mechanism | Current state |
 |---|---|---|
-| **通用性** | L0 内置应用 / L1 声明式场景模板 / L2 Wasm 插件（有界）/ **L3 原生装载禁止** | 设计已定，未实现 |
-| **可预测性** | 应用集固定 → WCET 可算；fuel + 内存页上界 → 插件有界；准入控制 → 超容量即拒 | **调度延迟已量化**，准入控制未实现 |
-| **可靠性** | MPU 分区；Non-Cacheable 帧缓冲；Rust 内存安全；单一可哈希制品 | 设计已定，未实现 |
-| **实时性** | 带宽上限；无阻塞设备 API；写操作一律「投递请求」 | **最小调度器已实现并上板** |
+| **Generality** | L0 built-in apps / L1 declarative scenario templates / L2 bounded Wasm plugins / **L3 native loading forbidden** | designed, not implemented |
+| **Predictability** | Fixed application set ⇒ WCET is computable; fuel and memory-page caps ⇒ plugins are bounded; admission control ⇒ over-capacity is refused | **dispatch latency measured**, admission control not implemented |
+| **Reliability** | MPU partitioning; Non-Cacheable framebuffer; Rust memory safety; a single hashable artifact | designed, not implemented |
+| **Real-time performance** | Bandwidth caps; non-blocking device API; every write is a "submit request" | **minimal scheduler implemented and verified on hardware** |
 
-### 关键判断：编译期组装 ≠ 运行时安装
+### The key judgement: compile-time assembly ≠ runtime installation
 
-禁止安装原生代码不等于放弃通用性。**模板产出的仍是一个固件镜像、一个可哈希可签名的制品、一组有限可穷举的执行路径。** 运行时不可变性完全保留，但一套内核能服务多个场景。
+Forbidding native code installation does not mean giving up generality. **What a template
+produces is still a single firmware image, still a hashable and signable artifact, still a finite
+and enumerable set of execution paths.** Runtime immutability is fully preserved, but one kernel
+can serve many scenarios.
 
-这不是新发明 —— ESPHome 也是「编译进固件」而非「装到设备上」，服务了数百万个场景。
+This is not a new invention — ESPHome also compiles its configuration into the firmware rather
+than installing it onto the device, and it serves millions of scenarios.
 
-刻意避开的两个坑：
+Two traps are deliberately avoided:
 
-| | NuttX | Zephyr | **Zay** |
+| | NuttX | Zephyr | **ZayGO** |
 |---|---|---|---|
-| 配置载体 | Kconfig 菜单 | Kconfig + Devicetree（**两套真相源**） | **单一声明式场景文件** |
-| 组合规模 | 1500+ 模板 | 数万配置项 | 数十个场景模板 |
-| 产物 | 配置后的固件 | 配置后的固件 | 固件 + **可调度性报告** + SBOM |
+| Configuration carrier | Kconfig menus | Kconfig + Devicetree (**two sources of truth**) | **a single declarative scenario file** |
+| Combination scale | 1500+ templates | tens of thousands of options | a few dozen scenario templates |
+| Artifact | a configured firmware | a configured firmware | firmware + **a schedulability report** + SBOM |
 
-### 四平面
+### The four planes
 
 ```
-┌─ 场景模板（编译期唯一入口）┐      ┌─ 单一固件镜像 ─┐
-│ 声明式文件                  │─────▶│ 可哈希 可签名   │
-│ 每任务显式声明 周期/截止/预算│      │ 路径有限可穷举  │
-└────────────────────────────┘      └────────┬──────┘
-┌─ 运行时 · MPU 分区隔离 ───────────────────┴──────┐
-│  实时控制面   独占预算，零动态分配，不持锁等待     │
-│  显示控制器   L8 索引帧缓冲 + 每层 256 项 CLUT     │
-│  管理面       HTTP/WS 出数据，带宽上限，可被抢占   │
-│  插件面       Wasm 沙箱，fuel + 内存页双上界       │
-│  统一设备 API 命名空间寻址 · 非阻塞消息传递        │
-└─────────────────────────────────────────────────┘
+┌─ Scenario template (the only build-time entry point) ┐   ┌─ Single firmware image ─┐
+│ Declarative file                                      │──▶│ Hashable, signable       │
+│ Every task declares period / deadline / budget        │   │ Finite, enumerable paths │
+└───────────────────────────────────────────────────────┘   └───────────┬──────────────┘
+┌─ Runtime · MPU partitioned ───────────────────────────────────────────┴─────┐
+│  Real-time plane   exclusive budget, zero dynamic allocation, no waiting   │
+│  Display controller L8 indexed framebuffer + 256-entry CLUT per layer       │
+│  Management plane  HTTP/WS data out, bandwidth capped, always preemptible │
+│  Plugin plane      Wasm sandbox, fuel + memory-page caps                  │
+│  Unified device API namespace addressing · non-blocking message passing   │
+└────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 两个已验证的硬件事实（决定了上面这些能不能落地）
+### Two verified hardware facts (they decide whether any of this is possible)
 
-- **STM32H723 有 MPU**（Cortex-M7 的 MPU 是可选特性，ST 在 H7 实现了它）→ 静态分区可行，不需要换 M33/M55。
-- **STM32 LTDC 原生支持 L8 + 每层 256×24bit CLUT**，不需要 DMA2D 参与 → 显示面 CPU 占用可降到接近零。
+- **The STM32H723 has an MPU** (the Cortex-M7 MPU is optional and ST implemented it on H7), so
+  static partitioning works and there is no need to move to an M33/M55.
+- **The STM32 LTDC natively supports L8 plus a 256×24-bit CLUT per layer**, with no DMA2D
+  involvement, so the display plane's CPU cost can drop to nearly zero.
 
 ---
 
-## 实测数据
+## Measured results
 
-P0 的产出：自研最小抢占式调度器在 STM32H723（**64 MHz HSI，未配 PLL，未开 cache**）上的时序分布。
+What P0 produced: the timing distribution of a self-written minimal preemptive scheduler on an
+STM32H723 (**64 MHz HSI, no PLL, cache off**).
 
-每模式 8192 个样本（1 ms 周期，约 8.2 秒），overruns 均为 0。
+8192 samples per mode (1 ms period, about 8.2 seconds), overruns = 0 in every run.
 
-**调度延迟（`t_start − t_release`）**
+**Dispatch latency (`t_start − t_release`)**
 
-| 模式 | 负载特征 | p50 | p99 | p99.9 | max（稳态） |
+| Mode | Load characteristic | p50 | p99 | p99.9 | max (steady state) |
 |---|---|---|---|---|---|
-| Idle | 8×nop 空转，无内存访问 | 3.58 µs | 3.66 µs | 3.66 µs | 3.66 µs |
-| Spin | 512 次乘/循环，纯寄存器 | 3.53 µs | 3.53 µs | 3.53 µs | 3.67 µs |
-| Web | 256 字节分支密集读 + 128 次写内存 | 3.66 µs | 3.66 µs | 3.66 µs | 3.66 µs |
+| Idle | 8×nop spin, no memory access | 3.58 µs | 3.66 µs | 3.66 µs | 3.66 µs |
+| Spin | 512 multiply/rotate iterations, registers only | 3.53 µs | 3.53 µs | 3.53 µs | 3.67 µs |
+| Web | 256-byte branch-dense read + 128 memory writes | 3.66 µs | 3.66 µs | 3.66 µs | 3.66 µs |
 
-**周期抖动**：p50 = 63997–64001 周期，峰峰值约 220 周期 = **3.5 µs**
+**Period jitter**: p50 = 63997–64001 cycles, peak-to-peak about 220 cycles = **3.5 µs**
 
-三个观察：
+Three observations:
 
-1. **负载类型几乎不影响调度延迟**（差异 ≤ 2.8%）。从"什么都不做"到"每轮 512 次乘加"再到"分支密集 + 写内存"，延迟几乎不动。
-2. **零长尾**：`p50 = p99.9 = max`，三种模式的稳态延迟全部落在 9 个周期的带宽内。对硬实时而言，**可预测性比低均值更有价值**。
-3. **`max=415–431` 全部来自样本 0**，是首次调度的冷启动伪影（I-Cache 为空）。8191 个稳态样本没有一个超过 300 周期。
+1. **Load type barely affects dispatch latency** (difference ≤ 2.8%). Going from "does nothing"
+   to "512 multiplies per round" to "branch-dense plus memory writes" moves the latency almost
+   not at all.
+2. **Zero long tail**: `p50 = p99.9 = max`, and in all three modes the steady-state latency fits
+   inside a 9-cycle band. For hard real-time, **predictability matters more than a low mean**.
+3. **The `max=415–431` values all come from sample 0**, a cold-start artefact (empty I-Cache).
+   Not one of the 8191 steady-state samples exceeded 300 cycles.
 
-**这个结果否证了原假设**：原判据是「干扰 > 任务周期 10% ⇒ 带宽限制升为架构基石」，实测干扰约 0%。
+**This falsifies the original hypothesis**: the criterion was "interference above 10% of the task
+period ⇒ the bandwidth cap becomes a cornerstone", and measured interference is roughly 0%.
 
-但这**不是"带宽限制没用"，而是实验没测到它要解决的场景** —— 真正威胁调度延迟的维度一个都没覆盖：
+But that is **not "the bandwidth cap is useless"** — it means the experiment never reached the
+scenario the cap exists for. Not one of the dimensions that actually threatens dispatch latency
+was covered:
 
-| 未覆盖的威胁 | 为什么没测到 |
+| Threat not covered | Why it was not covered |
 |---|---|
-| **中断屏蔽时长** | 负载从不 `cpsid i`，而 SysTick 优先级最高，随时能进来 |
-| **总线争用** | 无 DMA、无 SPI、无以太网流量 |
-| **Cache 抖动** | 复位后 cache 默认关闭 |
-| **高频时钟** | 64 MHz HSI，非目标频率 |
+| **Interrupt masking duration** | The load never executes `cpsid i`, and SysTick has the highest priority so it can always get in |
+| **Bus contention** | No DMA, no SPI, no Ethernet traffic |
+| **Cache jitter** | Cache is off after reset |
+| **Higher clock** | 64 MHz HSI, not the target frequency |
 
-⇒ 下一步是**实验 02：临界区屏蔽中断的敏感度扫描**（自变量是屏蔽时长，不是负载类型）。
-那才是「带宽限制是否必需」的真正判据。
+⇒ The next step is **experiment 02: a sensitivity sweep over interrupt-masking duration** (the
+independent variable is masking duration, not load type). That is the real criterion for whether
+the bandwidth cap is required.
 
-完整判读与实验局限见 [`docs/EXPERIMENT-01.md`](docs/EXPERIMENT-01.md) 第七节。
+Full interpretation and experimental limitations: section 7 of
+[`docs/EXPERIMENT-01.md`](docs/EXPERIMENT-01.md).
 
 ---
 
-## 现在到哪一步了
+## Where the project stands
 
-### 已验证（有证据）
+### Verified (with evidence)
 
-| 项 | 证据 |
+| Item | Evidence |
 |---|---|
-| `exp01` 编译通过，零警告 | rustc 1.97.1，`cargo build --release` |
-| PendSV 上下文切换只有 9 条指令，编译器未插入序言 | 反汇编逐条核对 |
-| 向量表正确挂钩 | `0x38 → PendSV`、`0x3C → SysTick` |
-| 内存布局装得下 | 初始 SP `0x24050000`，`.bss` 74KB / 320KB |
-| **固件在硬件上跑通** | 三模式各 8192 样本，零长尾，overruns=0 |
-| SWD 链路 | 探针 Flash Pro(CMSIS-DAP) `0d28:0204` |
-| 芯片身份 | CPUID `0x411FC272`（M7 r1p2）、Flash 1024KB、DEV_ID `0x483` |
-| 板载外设引脚 | 原理图已提取，见 `docs/HARDWARE-NOTES.md` |
+| `exp01` builds with zero warnings | rustc 1.97.1, `cargo build --release` |
+| PendSV context switch is 9 instructions with no compiler-inserted prologue | disassembly checked line by line |
+| Vector table hooks up correctly | `0x38 → PendSV`, `0x3C → SysTick` |
+| Memory layout fits | initial SP `0x24050000`, `.bss` 74KB / 320KB |
+| **Firmware runs on hardware** | 8192 samples per mode across three modes, zero long tail, overruns = 0 |
+| SWD link | probe "Flash Pro(CMSIS-DAP)" `0d28:0204` |
+| Chip identity | CPUID `0x411FC272` (M7 r1p2), Flash 1024KB, DEV_ID `0x483` |
+| On-board peripheral pins | extracted from the schematic, see `docs/HARDWARE-NOTES.md` |
 
-PendSV 的实际机器码：
+The actual machine code of PendSV:
 
 ```
 mrs   r0, PSP
@@ -182,116 +214,123 @@ msr   PSP, r0
 bx    lr
 ```
 
-### 未验证（明说）
+### Not verified (stated plainly)
 
-| 项 | 状态 |
+| Item | Status |
 |---|---|
-| 中断屏蔽 / 总线争用下的延迟 | **未测**（实验 02 的目标） |
-| 开启 cache 后的时序 | **未测** |
-| 550 MHz（PLL）下的时序 | **未测** |
-| MPU 分区正确性 | 未实现，需故障注入 |
-| Wasm 插件层 | 未实现 |
-| L8 + CLUT 显示 | 未实现（硬件支持已确认） |
-| Verus 验证 | 未开始 |
-| `wfi` 下调试口失联 | **未解决**（见 `exp01/README.md` 踩坑记录） |
+| Latency under interrupt masking / bus contention | **not measured** (the goal of experiment 02) |
+| Timing with cache enabled | **not measured** |
+| Timing at 550 MHz (PLL) | **not measured** |
+| MPU partition correctness | not implemented, needs fault injection |
+| Wasm plugin layer | not implemented |
+| L8 + CLUT display | not implemented (hardware support confirmed) |
+| Verus verification | not started |
+| Debug port dying on `wfi` | **unresolved** (see the pitfalls section of `exp01/README.md`) |
 
 ---
 
-## 快速开始
+## Quick start
 
-### 依赖
+### Dependencies
 
 ```bash
 rustup target add thumbv7em-none-eabihf
 cargo install probe-rs-tools
 ```
 
-Rust ≥ 1.88（需要 `#[unsafe(naked)]` + `naked_asm!`）。
+Rust ≥ 1.88 (needed for `#[unsafe(naked)]` + `naked_asm!`).
 
-### 接线
+### Wiring
 
-只需 4 根：**VTref → 3.3V**、SWDIO、SWCLK、GND。（VTref 悬空会报 `No target connected`，这是头号故障。）
+Four wires: **VTref → 3.3V**, SWDIO, SWCLK, GND. (A floating VTref gives
+`No target connected`, which is the number one wiring mistake.)
 
-**不需要屏幕、不需要串口线。** 输出走 RTT，复用烧录用的 SWD 线。
+**No screen, no USB, no serial cable.** Output goes over RTT, reusing the SWD cable you already
+need for flashing.
 
-### 确认芯片型号
+### Confirm the chip part number
 
 ```bash
 probe-rs chip list | grep -i h723
 ```
 
-改 `exp01/.cargo/config.toml` 里的 `--chip`。参考板为 `STM32H723ZGT6`（1MB Flash / LQFP144）。
+Then edit `--chip` in `exp01/.cargo/config.toml`. The reference board is `STM32H723ZGT6`
+(1MB Flash / LQFP144).
 
-### 跑
+### Run
 
 ```bash
 cd exp01
-cargo run --release          # 默认 Mode::Idle（基线）
+cargo run --release          # defaults to Mode::Idle (the baseline)
 ```
 
-采样满 8192 条后自动停 SysTick、打印全部样本、停机（`bkpt` 是"完成"信号，
-probe-rs 会因此以非零码退出，属正常）。
+After 8192 samples the firmware stops SysTick, prints every sample and halts (the `bkpt` is the
+"done" signal, so probe-rs exits with a non-zero code — that is expected).
 
-三个实验点通过 `src/main.rs` 的 `const MODE` 切换：
+The three experiment points are selected by the `const MODE` in `src/main.rs`:
 
-| `MODE` | 负载 | 对应设计文档 |
+| `MODE` | Load | Corresponding design document |
 |---|---|---|
-| `load::Mode::Idle` | 8×nop 空转 | 实验 1 基线 |
-| `load::Mode::Spin` | 纯算术死循环 | 实验 2 满载 CPU |
-| `load::Mode::Web` | 解析 + 写帧缓冲 | 实验 3 模拟管理面 |
+| `load::Mode::Idle` | 8×nop spin | experiment 1, baseline |
+| `load::Mode::Spin` | pure arithmetic spin | experiment 2, CPU saturated |
+| `load::Mode::Web` | parse + framebuffer write | experiment 3, simulated management plane |
 
-### 分析
+### Analyse
 
 ```bash
 python analysis/parse.py out-idle.csv
 ```
 
-**核心指标是 `t_start - t_release`（调度延迟），不是执行时间。** 执行时间只说明"跑了多久"，
-看不出"被拖了多久"——这是测实时性最常见的错误。
+**The core metric is `t_start - t_release` (dispatch latency), not execution time.** Execution
+time only says "how long did it run" and cannot show "how long was it held up" — this is the
+most common mistake when measuring real-time behaviour.
 
 ---
 
-## 目录结构
+## Directory layout
 
 ```
-Zay/
-├── README.md              ← 你在这里
-├── PLAN.md                实施计划：判据、阶段、实现方式、风险
+ZayGO/
+├── README.md              ← you are here (English)
+├── README.zh-CN.md        中文版
+├── PLAN.md                implementation plan: criteria, phases, risks (English)
+├── PLAN.zh-CN.md          中文版
 ├── docs/
-│   ├── POSITIONING.md     定位论证：三项目取证 + 共同缺口 + 路线对比
-│   ├── ARCHITECTURE.md    四平面架构、场景模板、设备 API、双显示后端
-│   ├── HARDWARE-NOTES.md  板子实测身份、引脚分配、USB Host 供电、电容选型
-│   └── EXPERIMENT-01.md   实验设计 + 实测结果与判读
+│   ├── POSITIONING.md     positioning: evidence from three projects, gaps, options
+│   ├── ARCHITECTURE.md    four planes, scenario templates, device API, display backends
+│   ├── HARDWARE-NOTES.md  board identity, pin assignment, USB Host power, capacitor selection
+│   └── EXPERIMENT-01.md   experiment design, measured results, interpretation
 └── exp01/
     ├── src/
-    │   ├── context.rs     naked 上下文切换（9 条汇编）
-    │   ├── sched.rs       双优先级调度器 + SysTick 释放
+    │   ├── context.rs     naked context switch (9 instructions)
+    │   ├── sched.rs       two-priority scheduler + SysTick release
     │   ├── time.rs        DWT CYCCNT
-    │   ├── load.rs        三负载：Idle / Spin / Web
-    │   ├── measure.rs     8192 条样本缓冲 + CSV
-    │   └── main.rs        入口（改 `MODE` 切实验点）
-    └── analysis/parse.py  PC 端分位数统计
+    │   ├── load.rs        three loads: Idle / Spin / Web
+    │   ├── measure.rs     8192-sample buffer + CSV
+    │   └── main.rs        entry point (change `MODE` to switch experiment point)
+    └── analysis/parse.py  percentile statistics on the PC
 ```
 
 ---
 
-## 文档
+## Documents
 
-| 文档 | 内容 |
+| Document | Contents |
 |---|---|
-| [`PLAN.md`](PLAN.md) | **实施计划**：判据、阶段表、各阶段实现方式、风险清单、明确不做的事 |
-| [`docs/POSITIONING.md`](docs/POSITIONING.md) | 三个参照项目的取证、共同缺口、候选路线与取舍 |
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | 四平面、双显示后端、场景模板、Plan 9 式设备 API |
-| [`docs/HARDWARE-NOTES.md`](docs/HARDWARE-NOTES.md) | 板子实测身份、引脚分配、USB Host 供电电路、电容选型 |
-| [`docs/EXPERIMENT-01.md`](docs/EXPERIMENT-01.md) | 实验设计、实测结果、判读与实验局限 |
-| [`exp01/README.md`](exp01/README.md) | 实验 01 的实现细节、**四个上板踩过的坑**、排查清单 |
+| [`PLAN.md`](PLAN.md) | **Implementation plan**: acceptance criteria, phase table, how each phase is implemented, risk register, explicit non-goals, pre-publication checklist |
+| [`docs/POSITIONING.md`](docs/POSITIONING.md) | Evidence from the three reference projects, the shared gaps, candidate routes and trade-offs |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Four planes, dual display backends, scenario templates, Plan 9-style device API |
+| [`docs/HARDWARE-NOTES.md`](docs/HARDWARE-NOTES.md) | Board identity, pin assignment, USB Host power circuit, capacitor selection |
+| [`docs/EXPERIMENT-01.md`](docs/EXPERIMENT-01.md) | Experiment design, measured results, interpretation and limitations |
+| [`exp01/README.md`](exp01/README.md) | Implementation details, **four hardware pitfalls hit**, troubleshooting checklist |
 
 ---
 
-## 命名
+## About the name
 
-`Zay` 是暂定名，尚未确定。
+`ZayGO`. There is no deep meaning behind it — it simply felt right, and some names are like
+that. It is not an acronym and it does not stand for anything.
 
-## 许可
+## Licence
 
-未定。在设计阶段，先不引入具体许可条款。
+Not decided yet. No licence terms are introduced during the design phase.

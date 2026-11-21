@@ -1,171 +1,173 @@
-# 架构补充：显示面、场景模板与分级开放
+# Architecture Supplement: Display Plane, Scenario Templates, and Tiered Extensibility
 
-> 配套文档：`POSITIONING.md`（定位论证）。本文档记录第三轮讨论确定的设计约束。
-> 状态：设计方向已定，细节待实现验证。全部结论基于 2026-11-19 检索到的公开信息。
+> English version. [中文版](ARCHITECTURE.zh-CN.md)
+
+> Companion document: `POSITIONING.md` (positioning rationale). This document records the design constraints settled in the third round of discussion.
+> Status: the design direction is decided, the details await implementation validation. All conclusions are based on public information retrieved on 2026-11-19.
 
 ---
 
-## 零、对前序结论的两处更正
+## Zero: Two Corrections to the Previous Round's Conclusions
 
-### 更正 1：STM32H7 有 MPU（上一轮说无，错误）
+### Correction 1: The STM32H7 does have an MPU (the previous round said it did not — that was wrong)
 
-ST 官方 STM32H723 页面原文：
+Verbatim from the official ST STM32H723 page:
 
 > "STM32H723xE/G devices support a full set of DSP instructions and **a memory protection unit (MPU)**
 > to enhance application security."
 
-Cortex-M7 的 MPU 是**可选**特性，ST 在 H7 系列（H723/H735/H743 等主流型号）实现了它。
-MPU 能力：8 个主区域 + 每区域 8 个子区域、特权/非特权访问权限、Normal/Device/Strongly Ordered 内存类型属性。
+The Cortex-M7 MPU is an **optional** feature; ST implements it in the H7 family (mainstream parts such as the H723/H735/H743).
+MPU capabilities: 8 main regions + 8 sub-regions per region, privileged/unprivileged access rights, Normal/Device/Strongly Ordered memory type attributes.
 
-**影响**：分区隔离方案**不需要更换到 M33/M55**，手上的 STM32H723 即可作为目标平台。
+**Impact**: the partition isolation scheme **does not require moving to an M33/M55**; the STM32H723 on hand can serve as the target platform.
 
-### 更正 2：H723 内存充足，帧缓冲不是瓶颈
+### Correction 2: The H723 has plenty of memory, the framebuffer is not the bottleneck
 
-STM32H723xE/G：550MHz Cortex-M7，1MB Flash，**564KB RAM**
-（192KB 可在 ITCM/AXI 间共享 + 64KB 专 ITCM + 128KB 专 AXI + 128KB DTCM + 48KB AHB + 4KB 备份）。
+STM32H723xE/G: 550MHz Cortex-M7, 1MB Flash, **564KB RAM**
+(192KB shareable between ITCM/AXI + 64KB dedicated ITCM + 128KB dedicated AXI + 128KB DTCM + 48KB AHB + 4KB backup).
 
-参考 ST 对 STM32H7A3 的定位原话：*"1.4 MB of SRAM can store an entire frame buffer"*——图形是 ST 自己认定的 H7 主战场。
+For reference, ST's own positioning of the STM32H7A3: *"1.4 MB of SRAM can store an entire frame buffer"* — graphics is the main battlefield ST itself assigns to the H7.
 
 ---
 
-## 一、显示面设计：L8 + CLUT
+## One: Display Plane Design — L8 + CLUT
 
-### 1.1 硬件原生支持（已核实）
+### 1.1 Hardware-Native Support (verified)
 
-STM32H723 的 **Chrom-ART 加速器（DMA2D）** 手册原文：
+Verbatim from the STM32H723 **Chrom-ART accelerator (DMA2D)** manual:
 
 > "All the classical color coding schemes are supported from 4-bit up to 32-bit per pixel
 > **with indexed or direct color mode**... **The DMA2D has its own dedicated memories for CLUTs
 > (color look-up tables)**."
 
-**L8 + CLUT 完全对齐 DMA2D 原生工作模式**，不是软件模拟调色板。
+**L8 + CLUT maps exactly onto the DMA2D native operating mode**; it is not a software-emulated palette.
 
-### 1.2 帧缓冲体积对比
+### 1.2 Framebuffer Size Comparison
 
-| 格式 | 320×240 | 480×272 | 800×480 | 备注 |
+| Format | 320×240 | 480×272 | 800×480 | Notes |
 |---|---|---|---|---|
-| RGB565（16bpp） | 150KB | 255KB | 750KB | 双缓冲翻倍 |
-| RGB888（24bpp） | 225KB | 382KB | 1125KB | H723 装不下 |
-| **L8 索引（8bpp）** | **75KB** | **127KB** | **375KB** | 配 256 项 CLUT（512B） |
+| RGB565 (16bpp) | 150KB | 255KB | 750KB | Double buffering doubles it |
+| RGB888 (24bpp) | 225KB | 382KB | 1125KB | Does not fit in the H723 |
+| **L8 indexed (8bpp)** | **75KB** | **127KB** | **375KB** | With a 256-entry CLUT (512B) |
 
-L8 相对 RGB565 节省 50%，相对 RGB888 节省 66.7%。在 564KB RAM 上，L8 可做双缓冲（150KB 总占用），
-RGB565 单缓冲都紧张。
+L8 saves 50% against RGB565 and 66.7% against RGB888. On 564KB RAM, L8 can do double buffering (150KB total),
+while RGB565 is tight even for single buffering.
 
-### 1.3 L8 带来的三项独特能力
+### 1.3 Three Unique Capabilities Brought by L8
 
-1. **换肤零成本**：改写 256×2 字节的 CLUT，整个界面配色即时切换。
-   RGB565 做不到（颜色直接编码在像素里）。
-2. **反色/夜间模式**：CLUT 反转即可，无需重绘。
-3. **帧缓冲可哈希、可 diff**：每个字节是索引而非颜色，
-   因此「这一帧和上一帧哪里变了」是字节级比较，不需要任何图像处理。
+1. **Zero-cost skinning**: rewrite the 256×2-byte CLUT and the whole UI palette switches instantly.
+   RGB565 cannot do this (the color is encoded directly into the pixels).
+2. **Inversion / night mode**: invert the CLUT, no redraw needed.
+3. **The framebuffer is hashable and diffable**: every byte is an index rather than a color,
+   so "where did this frame change from the previous one" is a byte-level comparison, with no image processing required.
 
-第 3 点与本项目的取证/证据链方法论天然契合。
+Point 3 fits naturally with this project's forensics / evidence chain methodology.
 
-### 1.4 显示面定位：查表而非渲染
+### 1.4 Display Plane Positioning: Table Lookup Rather Than Rendering
 
-L8 + CLUT 把「渲染」降维成「查表」：
+L8 + CLUT reduces "rendering" to "table lookup":
 
 ```
-传感器读数 ──→ 映射到索引 i（0..255）──→ CLUT[i] ──→ 屏幕颜色
+sensor reading ──→ mapped to index i (0..255) ──→ CLUT[i] ──→ screen colour
 ```
 
-- 复杂度从 O(布局算法) 降到 O(查表)
-- 映射规则可预先验证（纯函数，可做属性测试）
-- 索引空间是**有限的语义槽位**（温度档位、状态图标、进度条段位），
-  天然可作为模板 schema 的一部分来声明
+- Complexity drops from O(layout algorithm) to O(table lookup)
+- The mapping rule can be verified ahead of time (a pure function, amenable to property-based testing)
+- The index space is a **finite set of semantic slots** (temperature bands, status icons, progress-bar segments),
+  which is naturally declarable as part of the template schema
 
-### 1.5 缓存一致性：L8 方案的隐藏代价（必须处理）
+### 1.5 Cache Coherency: The Hidden Cost of the L8 Approach (must be handled)
 
-Cortex-M7 有 32KB D-Cache（write-back 默认）。DMA2D 与 LTDC **直读物理内存**，看不到 Cache 中的脏数据。
+The Cortex-M7 has a 32KB D-Cache (write-back by default). DMA2D and LTDC **read physical memory directly** and cannot see dirty data in the cache.
 
-ST 应用笔记 DM00272913 原文：
+Verbatim from ST application note DM00272913:
 
 > "If the CPU writes something to an area that has a write-back cache attribute, the write result is not
 > seen on the SRAM as the access is buffered, and then if the DMA reads the same memory area to perform
 > a data transfer, the values read do not match the intended data."
 
-**已知踩坑实例**：ST 社区有 TouchGFX 用户将 cache 维护操作限制到帧缓冲范围后，
-仍出现**鬼影（ghosting）与 HardFault**——因为帧缓冲跨越 AXI SRAM（write-through）与 SDRAM（write-back）
-两个区域，混合策略下 `SCB_CleanInvalidateDCache_by_Addr` 不足以保证可见性。
+**Known pitfall instance**: on the ST community forum there are TouchGFX users who restricted cache maintenance operations to the framebuffer range,
+and still hit **ghosting (ghost images) and HardFault** — because the framebuffer spans two regions, AXI SRAM (write-through) and SDRAM (write-back),
+and under a mixed policy `SCB_CleanInvalidateDCache_by_Addr` is not enough to guarantee visibility.
 
-**四种官方解法**：
+**Four official solutions**:
 
-| 方案 | 做法 | 代价 |
+| Option | Approach | Cost |
 |---|---|---|
-| A | MPU 将帧缓冲设为 **Non-Cacheable** | 简单；性能损失可接受；社区推荐 |
-| B | 保留 Write-Back，写完显式 `SCB_CleanDCache_by_Addr` | 性能最高；**漏一处即花屏** |
-| C | 改 Write-Through | 仅适合 TX；H74x/H75x r1p1 及更早有勘误 |
-| D | 帧缓冲整体置于 Non-Cacheable 连续区 | 需满足对齐与连续性要求 |
+| A | Use the MPU to mark the framebuffer **Non-Cacheable** | Simple; the performance loss is acceptable; recommended by the community |
+| B | Keep Write-Back and explicitly `SCB_CleanDCache_by_Addr` after each write | Highest performance; **miss one spot and the screen is corrupted** |
+| C | Switch to Write-Through | Suitable for TX only; errata exist on H74x/H75x r1p1 and earlier |
+| D | Place the whole framebuffer in a contiguous Non-Cacheable region | Alignment and contiguity requirements must be met |
 
-**本项目决策：A**。理由：把帧缓冲划为独立 MPU 区域并标 Non-Cacheable，
-一个显示 bug 不会污染其他内存，一个内存 bug 不会让 DMA2D 读到撕裂数据。
-这与「可靠性」目标一致——用一点性能换确定的故障边界。
+**This project's decision: A**. Reason: carve the framebuffer out as its own MPU region and mark it Non-Cacheable,
+so one display bug cannot pollute other memory and one memory bug cannot make DMA2D read torn data.
+This is consistent with the "reliability" goal — trading a little performance for a deterministic failure boundary.
 
-### 1.6 两条硬件硬约束（踩过才知道）
+### 1.6 Two Hard Hardware Constraints (you only know after stepping on them)
 
-1. **DMA1/DMA2 访问不到 DTCM / ITCM**（0x20000000）。
-   DMA1/DMA2 位于 D2 域；只有 MDMA（D1 域）能访问 TCM。
-   ⇒ **帧缓冲必须放 AXI SRAM / SRAM1-3 / SDRAM，不能放 DTCM。**
-2. **LTDC 图层显存起始地址必须 16 字节对齐**，建议 32 字节对齐
-   （cache line 为 32 字节，32 字节对齐可避免 cache 维护操作的粒度陷阱）。
+1. **DMA1/DMA2 cannot reach DTCM / ITCM** (0x20000000).
+   DMA1/DMA2 live in the D2 domain; only MDMA (D1 domain) can access TCM.
+   ⇒ **The framebuffer must go in AXI SRAM / SRAM1-3 / SDRAM, not DTCM.**
+2. **The LTDC layer framebuffer start address must be 16-byte aligned**; 32-byte alignment is recommended
+   (the cache line is 32 bytes, and 32-byte alignment avoids the granularity trap in cache maintenance operations).
 
-### 1.7 中文字体：真正的成本项
+### 1.7 Chinese Fonts: The Real Cost Item
 
-帧缓冲不是瓶颈，**字体才是**。实测数据：
+The framebuffer is not the bottleneck, **the fonts are**. Measured data:
 
-| 方案 | 体积 | 渲染开销 |
+| Option | Size | Rendering Overhead |
 |---|---|---|
-| 全量 CJK TTF | 10MB+ | 需 FreeType 实时栅格化，不可行 |
-| GB2312 全量 16×16 位图 | 216KB | memcpy + 位掩码，近零 |
-| 全量 16px 中文库（LVGL） | 2.8MB | — |
-| LVGL 16pt ASCII 95 字符 | 12KB | — |
-| LVGL 中文基本区 20902 字符 | **2.1MB** | — |
-| ESP32-C3 上 20px / 500 汉字子集 | **142KB** | 60FPS 保持 |
-| 血氧仪实测：32 汉字 + 15 ASCII | **≈1KB** | 覆盖 100% UI 文本 |
+| Full CJK TTF | 10MB+ | Requires real-time rasterization with FreeType, not feasible |
+| Full GB2312 16×16 bitmap | 216KB | memcpy + bit masking, near zero |
+| Full 16px Chinese font set (LVGL) | 2.8MB | — |
+| LVGL 16pt ASCII, 95 characters | 12KB | — |
+| LVGL Chinese basic block, 20902 characters | **2.1MB** | — |
+| 20px / 500-Chinese-character subset on ESP32-C3 | **142KB** | 60FPS maintained |
+| Pulse-oximeter measurement: 32 Chinese characters + 15 ASCII | **≈1KB** | Covers 100% of the UI text |
 
-**决策：字体在编译期按场景模板实际用到的字符串做子集化，生成位图字库烧进镜像。**
-用 `pyftsubset` + `fonttools` 离线生成，输出为静态数组。
+**Decision: subset the fonts at compile time against the strings the scenario template actually uses, generate a bitmap font library, and burn it into the image.**
+Generate it offline with `pyftsubset` + `fonttools`, emitting a static array.
 
-这与「应用集固定」是同一条逻辑的延伸：**场景模板声明了要显示什么文字，编译期就把字库裁好。**
-若此链路不闭合，整个方案在中文场景下漏气。
+This is an extension of the same logic as "the application set is fixed": **the scenario template declares what text to display, and compile time trims the font library accordingly.**
+If this chain does not close, the whole approach leaks in Chinese-language scenarios.
 
-### 1.8 显示面绝不可阻塞实时面
+### 1.8 The Display Plane Must Never Block the Real-Time Plane
 
-- 帧缓冲更新走 DMA2D，不占 CPU 做逐像素搬运
-- 显示任务自身的优先级低于实时面，且带宽受限
-- 显示故障（花屏、字库缺失）不得传播到实时面：MPU 分区隔离兜底
+- Framebuffer updates go through DMA2D, no CPU time spent on per-pixel copying
+- The display task's own priority is below the real-time plane, and its bandwidth is capped
+- Display failures (corrupted screen, missing font library) must not propagate to the real-time plane: MPU partition isolation is the backstop
 
 ---
 
-## 二、场景模板：通用性的真正来源
+## Two: Scenario Templates — the True Source of Generality
 
-### 2.1 核心洞察
+### 2.1 Core Insight
 
-「不允许运行时安装软件」若走到极端，项目会退化为封闭垂直产品，通用性归零。
-**编译期组装是解药**：
+"If installing software at runtime is not allowed" taken to the extreme turns the project into a closed vertical product, and generality drops to zero.
+**Compile-time assembly is the antidote**:
 
-> 模板产出的仍然是一个固件镜像、一个可哈希可签名的制品、
-> 一组有限可穷举的执行路径。**运行时不可变性完全保留，
-> 但同一套内核能服务多个场景。**
+> What the template produces is still one firmware image, one hashable and signable artifact,
+> a finite, exhaustible set of execution paths. **Runtime immutability is fully preserved,
+> but the same kernel can serve multiple scenarios.**
 
-这不是新发明，是被大规模验证过的模式：ESPHome 也是「编译进固件」而非「装到设备上」，
-却服务了数百万个不同场景。
+This is not a new invention, it is a pattern validated at scale: ESPHome also "compiles into the firmware" rather than "installing onto the device",
+yet serves millions of different scenarios.
 
-### 2.2 与 NuttX / Zephyr 配置体系的区别
+### 2.2 Difference from the NuttX / Zephyr Configuration Systems
 
-| 设计选择 | NuttX | Zephyr | **本项目** |
+| Design Choice | NuttX | Zephyr | **This Project** |
 |---|---|---|---|
-| 配置载体 | Kconfig 菜单（组合爆炸） | Kconfig + Devicetree（**两套真相源**） | **单一声明式场景文件** |
-| 真相源数量 | 一套 | 两套，需保持同步 | **一套** |
-| 组合规模 | 1500+ 模板 | 数万配置项 | **数十个场景模板** |
-| 产物 | 配置后的固件 | 配置后的固件 | 固件 + **可调度性报告** + SBOM |
-| 主要短板（公开评价） | 配置负担重、学习曲线陡 | 两套真相源易不一致 | — |
+| Configuration Vehicle | Kconfig menus (combinatorial explosion) | Kconfig + Devicetree (**two sources of truth**) | **A single declarative scenario file** |
+| Number of Sources of Truth | One | Two, must be kept in sync | **One** |
+| Combination Scale | 1500+ templates | Tens of thousands of configuration items | **Dozens of scenario templates** |
+| Artifact | The configured firmware | The configured firmware | Firmware + **schedulability report** + SBOM |
+| Main Weakness (public assessments) | Heavy configuration burden, steep learning curve | Two sources of truth easily drift apart | — |
 
-NuttX 的 1500+ 模板被公开资料列为主要短板：
+Public material lists NuttX's 1500+ templates as its main weakness:
 *"its hundreds of configuration options make maintenance substantially more complicated."*
-本项目必须避开这个坑：**场景级模板数十个，而非配置项数千**。
+This project must avoid that pitfall: **dozens of scenario-level templates, not thousands of configuration options**.
 
-### 2.3 场景模板的形态（示意）
+### 2.3 Shape of a Scenario Template (illustrative)
 
 ```yaml
 # scenes/guard-panel.zay
@@ -175,7 +177,7 @@ display:
   height: 240
   format: l8-clut
   palette: industrial-dark
-  fonts:                       # 编译期子集化输入
+  fonts:                       # compile-time subsetting input
     - { family: noto-sans-cjk, size: 16, chars: "温度 压力 报警 正常 故障 状态 时间" }
 realtime:
   - { task: imu-sample,  period: 5ms,  deadline: 1ms, budget: 15% }
@@ -188,316 +190,321 @@ extensions:
 drivers: [ imu, can, display-st7789, w25q128 ]
 ```
 
-### 2.4 一份文件，三重身份
+### 2.4 One File, Three Identities
 
-这是本项目最有价值的设计点：
+This is the most valuable design point in this project:
 
-1. **编译输入** —— 决定镜像里包含哪些模块
-2. **准入控制的依据** —— 每个任务的 `budget` 是显式声明的，可参与可调度性分析
-3. **可调度性报告的输入** —— 与分析工具输出对齐
+1. **Compile-time input** — determines which modules end up in the image
+2. **Basis for admission control** — each task's `budget` is explicitly declared and can take part in schedulability analysis
+3. **Input to the schedulability report** — aligned with the analysis tool's output
 
-「通用性」与「可预测性」被绑在**同一个文件**上，而不是两套互不相干的机制。
+"Generality" and "predictability" are tied to **the same file**, not to two unrelated mechanisms.
 
-### 2.5 附带收益
+### 2.5 Incidental Benefits
 
-- 场景 → 镜像 → SBOM → 哈希，一条链。
-  SBOM 格式可借鉴 Zephyr 4.5 新增的 SPDX 3.0 支持。
-- 同一内核、多个场景，各自有独立的可调度性报告与时序证据。
-- 模板本身是声明式结构 ⇒ **schema 可形式化验证**，
-  可与内核不变式的 Verus 验证并行推进。
+- Scenario → image → SBOM → hash, one chain.
+  The SBOM format can borrow from the SPDX 3.0 support newly added in Zephyr 4.5.
+- One kernel, multiple scenarios, each with its own schedulability report and timing evidence.
+- The template itself is a declarative structure ⇒ **the schema can be formally verified**,
+  and this can proceed in parallel with the Verus verification of the kernel invariants.
 
 ---
 
-## 三、分级开放：通用性不砍到零
+## Three: Tiered Extensibility — Generality Not Cut to Zero
 
-「不允许安装软件」若走到极端，项目会从「平台」退化为「产品」，生态归零。
-Plan 9 的教训正在此处——Drew DeVault 的评价：
+"If installing software is not allowed" taken to the extreme turns the project from a "platform" into a "product", and the ecosystem dies.
+The lesson of Plan 9 applies here — Drew DeVault's assessment:
 
 > "Plan 9 failed, in a sense, because Unix was simply too big and too entrenched at the time."
 
-因此保留分级扩展，但**原生代码装载必须禁止**：
+So tiered extensibility is retained, but **native code loading must be forbidden**:
 
-| 层级 | 谁能写 | 能否装入设备 | 可预测性保证 |
+| Tier | Who Can Write It | Can It Be Loaded Onto the Device | Predictability Guarantee |
 |---|---|---|---|
-| L0 内置应用 | 仅项目自身 | 编译进镜像 | 完整保证（可穷举） |
-| L1 声明式场景配置 | 使用者 | 编译进镜像 | 高（不执行任意代码） |
-| L2 Wasm 插件 | 第三方 | 运行时加载 | **有界**（fuel + 内存页双上界） |
-| L3 原生代码 | 任何人 | **禁止** | 无 |
+| L0 built-in applications | The project itself only | Compiled into the image | Full guarantee (exhaustible) |
+| L1 declarative scenario configuration | The user | Compiled into the image | High (executes no arbitrary code) |
+| L2 Wasm plugins | Third parties | Loaded at runtime | **Bounded** (fuel + memory page, two upper bounds) |
+| L3 native code | Anyone | **Forbidden** | None |
 
-### 3.1 L2 为何可行：wasmi 的关键性质（已核实）
+### 3.1 Why L2 Is Feasible: the Key Properties of wasmi (verified)
 
-| 性质 | 说明 |
+| Property | Description |
 |---|---|
-| 语言 | Rust（与内核同语言，无跨语言边界） |
-| 部署 | `no_std` 可用，适配 MCU |
-| **fuel metering** | 内置，给宿主界定模块可消耗多少执行量 |
-| 内存 | 线性内存按页分配 ⇒ 内存占用有硬上界 |
-| 执行模型 | 解释执行，**无 JIT**，无 W^X 问题 |
-| 确定性 | 行为可复现，适合审计 |
-| 合规 | 100% WebAssembly spec testsuite |
-| 安全审计 | 两次外部审计：Runtime Verification Inc.（0.36–0.38，Stellar 基金会委托）、SRLabs（0.31，Parity Technologies 委托），报告 PDF 已提交仓库 |
-| 版本 | 2.0.0 发布于 2026-09-01；2.0 将 fuel 计量绑定到输入 Wasm 而非内部字节码，使模块成本跨版本稳定 |
-| 已知限制 | function references / GC / threads / exception handling 仍为 tracking issue，含这些特性的模块无法加载 |
-| 生态 | 830 个 crate 直接/间接依赖；月下载量约 178 万 |
+| Language | Rust (same language as the kernel, no cross-language boundary) |
+| Deployment | `no_std` is available, suits MCU |
+| **fuel metering** | Built in, bounding for the host how much execution a module may consume |
+| Memory | Linear memory is allocated by page ⇒ the memory footprint has a hard upper bound |
+| Execution Model | Interpreted execution, **no JIT**, no W^X problem |
+| Determinism | Behavior is reproducible, suitable for auditing |
+| Compliance | 100% WebAssembly spec testsuite |
+| Security Audit | Two external audits: Runtime Verification Inc. (0.36–0.38, commissioned by the Stellar Foundation) and SRLabs (0.31, commissioned by Parity Technologies); the report PDFs have been committed to the repository |
+| Version | 2.0.0 released on 2026-09-01; 2.0 binds fuel metering to the input Wasm rather than internal bytecode, making module cost stable across versions |
+| Known Limitations | function references / GC / threads / exception handling are still tracking issues; modules containing these features cannot be loaded |
+| Ecosystem | 830 crates depend on it directly/indirectly; about 1.78 million downloads per month |
 
-**为什么这个组合重要**：fuel + 内存页两个上界，正是 WCET 分析与 RAM 分析所需的输入。
-⇒ 「通用」与「有界可预测」在 L2 层可以同时成立。
+**Why this combination matters**: the two upper bounds — fuel and memory pages — are exactly the inputs that WCET analysis and RAM analysis need.
+⇒ "General" and "bounded and predictable" can hold simultaneously at the L2 tier.
 
-### 3.2 语言与工具链一致性
+### 3.2 Language and Toolchain Consistency
 
-Wasm 是 Rust 的一等公民（`wasm32-unknown-unknown` 目标），内核、插件、宿主工具全在同一语言生态内。
+Wasm is a first-class citizen of Rust (the `wasm32-unknown-unknown` target); the kernel, the plugins, and the host tooling all live in the same language ecosystem.
 
 ---
 
-## 四、场景模板 × 四平面：最终架构
+## Four: Scenario Template × Four Planes — the Final Architecture
 
 ```
-┌─ 场景模板（编译期唯一入口）─┐      ┌─ 单一固件镜像 ─┐
-│ 声明式场景文件              │─────▶│ 可哈希 可签名   │
-│ 每任务显式声明 周期/截止/预算 │      │ 路径有限可穷举  │
-│ 字体子集化输入              │      │ 可调度性报告    │
-└────────────────────────────┘      │ SBOM 清单       │
-                                    └─────────┬──────┘
-┌─ Zay 运行时 · MPU 分区隔离 ────────────────┴──────┐
-│ ┌─────────────────────────────────────────────────┐ │
-│ │ 实时控制面   独占预算，零动态分配，不持锁等待     │ │
-│ ├─────────────────────────────────────────────────┤ │
-│ │ 显示控制器层 L8 统一帧缓冲 + 每层 256 项 CLUT     │ │  ← 第三轮修订
-│ │              后端可选：LTDC 硬件扫出 / SPI 推送   │ │
-│ │              帧缓冲区标 Non-Cacheable           │ │
-│ ├─────────────────────────────────────────────────┤ │
-│ │ 管理面       HTTP/WS 出数据，带宽上限，可被抢占  │ │
-│ │              承载触摸事件处理与 UI 状态           │ │
-│ ├─────────────────────────────────────────────────┤ │
-│ │ 插件面       Wasm 沙箱，fuel + 内存页双上界      │ │
-│ └─────────────────────────────────────────────────┘ │
-│ ┌─────────────────────────────────────────────────┐ │
-│ │ 统一设备 API  命名空间寻址 · 非阻塞消息传递      │ │
-│ └─────────────────────────────────────────────────┘ │
-└───────────────────────────────────────────────────┘
+┌─ Scenario template (only build-time entry) ─┐   ┌─ Single firmware image ─┐
+│ Declarative scenario file                    │──▶│ Hashable, signable       │
+│ Every task declares period / deadline / budget│   │ Finite, enumerable paths │
+│ Font subsetting input                        │   │ Schedulability report    │
+└──────────────────────────────────────────────┘   │ SBOM                     │
+                                                   └───────────┬──────────────┘
+┌─ ZayGO runtime · MPU partitioned ─────────────────────────┴─────┐
+│ ┌─────────────────────────────────────────────────────────────┐ │
+│ │ Real-time plane  exclusive budget, zero dynamic alloc,       │ │
+│ │                  never waits holding a lock                  │ │
+│ ├─────────────────────────────────────────────────────────────┤ │
+│ │ Display controller  L8 unified framebuffer + 256-entry CLUT  │ │  ← third revision
+│ │                     per layer                              │ │
+│ │                     backends: LTDC hardware scan-out / SPI  │ │
+│ │                     framebuffer marked Non-Cacheable        │ │
+│ ├─────────────────────────────────────────────────────────────┤ │
+│ │ Management plane HTTP/WS data out, bandwidth capped,        │ │
+│ │                  always preemptible, carries touch events   │ │
+│ ├─────────────────────────────────────────────────────────────┤ │
+│ │ Plugin plane     Wasm sandbox, fuel + memory-page bounds    │ │
+│ └─────────────────────────────────────────────────────────────┘ │
+│ ┌─────────────────────────────────────────────────────────────┐ │
+│ │ Unified device API  namespace addressing · non-blocking      │ │
+│ │                       message passing                       │ │
+│ └─────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-### 4.1 平面职责与约束汇总
+### 4.1 Summary of Plane Responsibilities and Constraints
 
-| 平面 | 优先级 | 内存属性 | 带宽上限 | 能否触达硬件 |
+| Plane | Priority | Memory Attributes | Bandwidth Cap | Can It Touch Hardware |
 |---|---|---|---|---|
-| 实时控制面 | 最高 | TCM / 独占 | 独占预算 | **直接读写，唯一允许** |
-| 显示控制器层 | 高但可让位 | Non-Cacheable 专用区 | LTDC 后端近乎为零；SPI 后端受限 | 只读快照，不改状态 |
-| 管理面 | 低 | 普通可缓存 | 硬上限（如 20%） | 仅经设备 API 投递请求 |
-| 插件面 | 最低 | 沙箱线性内存 | fuel 上界 | 仅经设备 API 投递请求 |
+| real-time plane | Highest | TCM / exclusive | Exclusive budget | **Direct read/write, the only one allowed** |
+| display controller | High but can yield | Dedicated Non-Cacheable region | Near zero for the LTDC backend; limited for the SPI backend | Read-only snapshot, does not change state |
+| management plane | Low | Ordinary cacheable | Hard cap (e.g. 20%) | Only submits requests via the device API |
+| plugin plane | Lowest | Sandboxed linear memory | fuel upper bound | Only submits requests via the device API |
 
-**关键规则：所有写操作都是「投递请求」而非「直接改状态」**，
-状态变更统一由实时面执行并回执。这是把「Web/插件不可预测」这条威胁彻底封死的机制。
+**Key rule: every write is a "submit a request", not a "change state directly"**,
+and all state changes are performed and acknowledged by the real-time plane. This is the mechanism that completely seals off the threat of "Web/plugins are unpredictable".
 
-### 4.1b 显示控制器层：双后端设计（第三轮新增）
+### 4.1b Display Controller Layer: Dual-Backend Design (added in the third round)
 
-L8 帧缓冲作为**跨后端不变的统一中间格式**。上层渲染永远只写 L8 索引，
-不感知后端差异；换 CLUT 即换肤，换后端不改一行渲染代码。
+The L8 framebuffer is the **uniform intermediate format that is invariant across backends**. The upper layer's rendering always writes L8 indices only
+and never perceives backend differences; swapping the CLUT is swapping the skin, and swapping the backend changes not a single line of rendering code.
 
 ```
-┌─ 显示控制器层（后端由场景模板选择）─────────────────┐
-│ ┌────────────────────────┐ ┌──────────────────────┐ │
-│ │ LTDC 后端（主力）       │ │ SPI 后端（成本档位）  │ │
-│ │ 并行 RGB 屏，硬件扫出   │ │ 屏无 CLUT，需软件展开 │ │
-│ │ CPU 零参与              │ │ DMA2D 做索引到 RGB565│ │
-│ │ LTDC 原生 L8 + 每层     │ │ 总线竞争成为干扰源    │ │
-│ │ 256 项 CLUT             │ │ 按脏矩形局部刷新      │ │
-│ │ 800×480 L8 双缓冲 768KB │ │                      │ │
-│ └────────────────────────┘ └──────────────────────┘ │
+┌─ Display controller layer (backend chosen by the scenario template) ─┐
+┌────────────────────────┐ ┌──────────────────────┐ │
+│ LTDC backend (primary)  │ │ SPI backend (cost)   │ │
+│ parallel RGB panel,     │ │ panel has no CLUT, so │ │
+│ hardware scan-out,      │ │ software must expand │ │
+│ zero CPU involvement,   │ │ DMA2D does indexed   │ │
+│ native L8 + 256-entry   │ │ to RGB565; bus       │ │
+│ CLUT per layer,         │ │ contention becomes   │ │
+│ 800x480 L8 double       │ │ the interference     │ │
+│ buffered = 768KB        │ │ source; refresh by   │ │
+│                        │ │ dirty rectangles     │ │
+└────────────────────────┘ └──────────────────────┘ │
 ├──────────────────────────────────────────────────────┤
-│ L8 统一帧缓冲 · Non-Cacheable · 32 字节对齐 · 不用 DTCM │
+│ L8 unified framebuffer · Non-Cacheable · 32-byte aligned · never DTCM │
 └──────────────────────────────────────────────────────┘
 ```
 
-#### LTDC 原生支持 L8 + CLUT（关键取证结论）
+#### LTDC Natively Supports L8 + CLUT (key forensics conclusion)
 
-STM32 LTDC 手册原文（适用于 H7 / N6）：
+Verbatim from the STM32 LTDC manual (applies to H7 / N6):
 
 > "**Color look-up table (CLUT) up to 256 colors (256x24-bit) per layer**"
 >
-> 输入像素格式含 "**L8 (8-bit luminance or CLUT)**"、AL44、AL88
+> The input pixel formats include "**L8 (8-bit luminance or CLUT)**", AL44, AL88
 
-中文资料表述更直白：
+Chinese-language sources put it more bluntly:
 
-> "L8（8-bit luminance or CLUT）8 位颜色格式，实际上仅仅是 8 位索引值，范围 0–255，
-> 而每个索引值的具体颜色值在查色表 CLUT 里面存储。"
+> "L8 (8-bit luminance or CLUT) is an 8-bit color format that is in fact only an 8-bit index value, ranging 0–255,
+> and the specific color value of each index is stored in the color look-up table CLUT."
 
-**这比 DMA2D 方案更直接**：LTDC 直接从 L8 帧缓冲读索引，用**硬件 CLUT**
-展开成 RGB888/RGB565 送屏，CPU 零参与，**不需要 DMA2D 参与搬运**。
-CLUT 通过 `LTDC_LxCLUTWR` 逐层写入，每层独立。
+**This is more direct than the DMA2D approach**: the LTDC reads indices straight out of the L8 framebuffer and expands them with a **hardware CLUT**
+into RGB888/RGB565 for the panel, with zero CPU involvement and **no need for DMA2D to participate in the transfer**.
+The CLUT is written layer by layer via `LTDC_LxCLUTWR`, each layer independent.
 
-#### SPI 屏（ST7789）无 CLUT —— 硬限制
+#### SPI Displays (ST7789) Have No CLUT — a Hard Limit
 
-ST7789 的 COLMOD (0x3A) 仅支持 12/16/18 位（RGB444/RGB565/RGB666），
-**无 indexed 模式、无 CLUT 寄存器**。
+The ST7789's COLMOD (0x3A) supports only 12/16/18 bits (RGB444/RGB565/RGB666),
+with **no indexed mode and no CLUT register**.
 
-⇒ H723 + ST7789 上 L8 无法直驱，必须先展开为 RGB565：
+⇒ On H723 + ST7789, L8 cannot drive the panel directly; it must first be expanded to RGB565:
 
-- DMA2D 可做 indexed → RGB565 像素格式转换（硬件支持）
-- **SPI 带宽成为瓶颈**：240×320×2 = 153KB/帧；SPI 40MHz 约 5MB/s
-  ⇒ 全屏刷新约 30ms（约 30fps 上限），且需 CPU/DMA 全程参与
-- ST7789 的 GRAM + CASET/RASET 窗口机制可只刷脏矩形以缓解
+- DMA2D can do the indexed → RGB565 pixel format conversion (hardware support)
+- **SPI bandwidth becomes the bottleneck**: 240×320×2 = 153KB/frame; SPI at 40MHz is about 5MB/s
+  ⇒ a full-screen refresh takes about 30ms (about a 30fps ceiling), and it requires CPU/DMA participation throughout
+- The ST7789's GRAM + CASET/RASET window mechanism can refresh only the dirty rectangle to mitigate this
 
-**结论：ST7789 可用，但属「SPI 屏 + 软件渲染」路线，不是 L8+CLUT 的验证平台。**
+**Conclusion: the ST7789 is usable, but it belongs to the "SPI display + software rendering" route and is not the L8+CLUT validation platform.**
 
-### 4.1c 两块板子的角色划分
+### 4.1c Division of Roles Between the Two Boards
 
 | | H723 + ST7789 | N647 + 4.3" RGB LCD |
 |---|---|---|
-| 总线 | SPI（CPU/DMA 推像素） | **并行 RGB（LTDC 扫出）** |
-| L8 + CLUT | ✗ 屏无 CLUT，需软件展开 | ✓ **LTDC 硬件 CLUT 原生支持** |
-| 刷屏 CPU 占用 | 高（受 SPI 带宽限制） | **零** |
-| 触摸 | ✗ 无 | ✓ GT911，I2C + 外部中断，5 点电容 |
-| 分辨率 | 240×320 | 800×480（或 480×272） |
-| 对实时性的影响 | **有**（总线竞争） | **几乎无**（纯 DMA） |
-| 内存账 | L8 双缓冲 150KB / 564KB RAM | L8 双缓冲 **768KB** / 4.2MB SRAM + 32MB HyperRAM |
-| 定位 | **成本敏感档位** | **主力旗舰档位** |
+| Bus | SPI (CPU/DMA pushes pixels) | **Parallel RGB (LTDC scan-out)** |
+| L8 + CLUT | ✗ No CLUT on the panel, software expansion needed | ✓ **LTDC hardware CLUT natively supported** |
+| CPU Cost of Screen Refresh | High (limited by SPI bandwidth) | **Zero** |
+| Touch | ✗ None | ✓ GT911, I2C + external interrupt, 5-point capacitive |
+| Resolution | 240×320 | 800×480 (or 480×272) |
+| Impact on Real-Time Performance | **Yes** (bus contention) | **Almost none** (pure DMA) |
+| Memory Budget | L8 double buffering 150KB / 564KB RAM | L8 double buffering **768KB** / 4.2MB SRAM + 32MB HyperRAM |
+| Positioning | **Cost-sensitive tier** | **Main flagship tier** |
 
-同一套内核、两种显示后端，由场景模板选择——这正是场景模板体系的用武之地。
+One kernel, two display backends, selected by the scenario template — this is exactly where the scenario template system earns its keep.
 
-#### N6 的额外图形硬件
+#### Additional Graphics Hardware on the N6
 
-- **Chrom-GRC (GFXMMU)**："Fully programmable display shape to physically store only the visible pixel"，
-  4 个虚拟缓冲，各 3072/4096 字节每行 × 1024 行，可映射到任意系统内存；
-  对圆形屏等非矩形显示可省内存。
-- ST 官方原话：4.2MB RAM "could store a double frame buffer for a 1280 x 800 display"。
-- **Neo-Chrom GPU2D**：支持格式含 **L8**、CLUT(256 条目)、ARGB8888、RGB565、RGB888、
-  A8/A4、AI44、AI88；基于命令列表的 DMA，CPU 开销极低。
+- **Chrom-GRC (GFXMMU)**: "Fully programmable display shape to physically store only the visible pixel",
+  4 virtual buffers, each 3072/4096 bytes per line × 1024 lines, mappable to arbitrary system memory;
+  saves memory for non-rectangular displays such as round panels.
+- ST's own words: 4.2MB RAM "could store a double frame buffer for a 1280 x 800 display".
+- **Neo-Chrom GPU2D**: supported formats include **L8**, CLUT (256 entries), ARGB8888, RGB565, RGB888,
+  A8/A4, AI44, AI88; command-list based DMA with extremely low CPU overhead.
 
-### 4.1d 触摸：新引入的实时性风险维度
+### 4.1d Touch: A Newly Introduced Real-Time Risk Dimension
 
-GT911 为 **I2C + 外部中断 PEN**（I2C 地址由配置电阻或 OTP 决定，常见 0x14 / 0x5D）。
+The GT911 is **I2C + external interrupt PEN** (the I2C address is set by configuration resistors or OTP; 0x14 / 0x5D are common).
 
-触摸是**外部异步输入**，若处理不当会直接冲击实时面。强制规则：
+Touch is **external asynchronous input**; if handled badly it hits the real-time plane directly. Mandatory rules:
 
 ```
-触摸中断（极高优先级，只做最少事）
-  → 读 GT911 寄存器（I2C，短事务）
-  → 投递事件消息给管理面
-  → 管理面更新 UI 状态
-  → 渲染写入 L8 帧缓冲
-  → LTDC 硬件自动扫出
+touch interrupt (highest priority, does the minimum)
+  -> read the GT911 registers (I2C, short transaction)
+  -> post an event message to the management plane
+  -> the management plane updates the UI state
+  -> render into the L8 framebuffer
+  -> the LTDC scans it out in hardware
 ```
 
-**硬规则**：
+**Hard rules**:
 
-1. **中断服务程序内绝不允许绘制、绝不允许读传感器**。
-   中断只做「读寄存器 + 投递消息」两件事。
-2. **触摸 I2C 总线独占**。若同一 I2C 总线上还挂有实时传感器，
-   管理面不得占用该总线——需在场景模板中显式声明总线归属。
-3. **触摸事件只改变 UI 状态**，不直接改变设备状态。
-   任何设备状态变更仍须经设备 API 投递到实时面执行。
+1. **Drawing in the ISR is absolutely forbidden; reading sensors in the ISR is absolutely forbidden**.
+   The interrupt does exactly two things: "read registers + submit a message".
+2. **The touch I2C bus is exclusive**. If real-time sensors hang off the same I2C bus,
+   the management plane must not occupy that bus — bus ownership must be declared explicitly in the scenario template.
+3. **Touch events only change UI state**, never device state directly.
+   Any device state change must still be submitted through the device API to the real-time plane for execution.
 
-> 触摸电容屏**无需校准**（正点原子原厂说明），省掉一道工序。
+> Capacitive touch panels **need no calibration** (per the vendor's own documentation from ALIENTEK), which saves one step in the process.
 
 
-### 4.2 设备 API 映射（Plan 9 风格，改动阻塞语义）
+### 4.2 Device API Mapping (Plan 9 Style, Changing the Blocking Semantics)
 
-Plan 9 的核心不是「everything is a file」，而是**每进程私有命名空间** +
-**一切用文本文件控制** + **9P 打通本地与远程**。
-其具体做法可直接借用：
+The core of Plan 9 is not "everything is a file", but **a private namespace per process** +
+**controlling everything through text files** + **9P bridging local and remote**.
+Its concrete approach can be borrowed directly:
 
-- 建 TCP 连接：打开 `/net/tcp/clone` 取 id → 往 `/net/tcp/<id>/ctl` 写
-  `connect 10.0.0.1!80` → 读写 `/net/tcp/<id>/data`
-- **没有 socket 系统调用**，dial() 就是几个文件操作，可用 shell 脚本实现
-- 设备控制走 `ctl` 文件写文本，而非二进制 ioctl ⇒ `echo` / `cat` 即可驱动硬件
+- To open a TCP connection: open `/net/tcp/clone` to get an id → write
+  `connect 10.0.0.1!80` to `/net/tcp/<id>/ctl` → read/write `/net/tcp/<id>/data`
+- **No socket system calls**; dial() is just a few file operations and can be implemented in a shell script
+- Device control goes through writing text to `ctl` files instead of binary ioctl ⇒ `echo` / `cat` can drive the hardware
 
-| 现实对象 | Plan 9 风格接口 | 实时性要点 |
+| Real-World Object | Plan 9 Style Interface | Real-Time Note |
 |---|---|---|
-| 传感器 | `/dev/sensor/<id>/value`（读=采样） | 采样走 DMA/中断，不阻塞读 |
-| 执行器 | `/dev/actuator/<id>/ctl`（写文本命令） | 写入即入队，由实时面消费 |
-| 配置 | `/etc/<key>` | 静态只读分区 |
-| 日志 | `/dev/log` | 环形缓冲，丢最旧而非阻塞 |
-| 状态 | `/stat/<task>` | 只读快照 |
-| 任务配额 | `/ctl/sched/admit` | 准入控制入口 |
+| Sensor | `/dev/sensor/<id>/value` (read = sampling) | Sampling goes via DMA/interrupts, reads do not block |
+| Actuator | `/dev/actuator/<id>/ctl` (write a text command) | The write is queued immediately and consumed by the real-time plane |
+| Configuration | `/etc/<key>` | Static read-only partition |
+| Log | `/dev/log` | Ring buffer, drops the oldest instead of blocking |
+| Status | `/stat/<task>` | Read-only snapshot |
+| Task Quota | `/ctl/sched/admit` | Admission control entry point |
 
-**与 Plan 9 的关键差异**：Plan 9 的阻塞式文件语义不适合硬实时。
-本项目改为**非阻塞消息传递**，但保留「命名空间 + 文本控制 + 一套协议」的统一性。
+**Key difference from Plan 9**: Plan 9's blocking file semantics do not suit hard real-time.
+This project switches to **non-blocking message passing**, but keeps the unity of "namespace + text control + one protocol".
 
 ---
 
-## 五、四维目标如何同时成立
+## Five: How the Four-Dimensional Goals Hold Simultaneously
 
-上一轮指出「通用 + 实时 + 可靠 + 可预测」互斥。本轮的四项约束组合给出了解：
+The previous round pointed out that "general + real-time + reliable + predictable" are mutually exclusive. This round's combination of four constraints gives the solution:
 
-| 目标 | 靠哪一项约束实现 |
+| Goal | Which Constraint Achieves It |
 |---|---|
-| 通用性 | L0-L2 分级开放（模板 + Wasm 插件），禁 L3 |
-| 可预测性 | 应用集固定 → WCET 可算；fuel/内存上界 → 插件有界；准入控制 → 超容量即拒 |
-| 可靠性 | MPU 分区隔离；Non-Cacheable 帧缓冲；Rust 内存安全；单一可哈希制品 |
-| 实时性 | 带宽上限；无阻塞设备 API；写操作改为投递请求 |
+| Generality | L0-L2 tiered extensibility (templates + Wasm plugins), L3 forbidden |
+| Predictability | Fixed application set → WCET computable; fuel/memory upper bounds → bounded plugins; admission control → reject once over capacity |
+| Reliability | MPU partition isolation; Non-Cacheable framebuffer; Rust memory safety; a single hashable artifact |
+| Real-Time Performance | Bandwidth cap; non-blocking device API; write operations changed to request submission |
 
-**关键：不是靠单一机制，而是靠四者叠加。**
-seL4 有可验证性与分区，但无通用性路径；
-Zephyr 有通用性，但明确放弃时序保证；
-本项目的组合在 MCU 侧尚无先例。
+**Key point: it does not rest on a single mechanism, it rests on all four stacked together.**
+seL4 has verifiability and partitioning but no path to generality;
+Zephyr has generality but explicitly gives up timing guarantees;
+this project's combination has no precedent on the MCU side.
 
 ---
 
-## 六、已定与待定
+## Six: Decided and Open
 
-### 6.1 已定（第一轮）
+### 6.1 Decided (First Round)
 
-- 设备**有屏幕**，但不渲染 HTML；显示走 **L8 索引 + 256 项 CLUT**
-- L8 帧缓冲区 **Non-Cacheable**（MPU 配置），不用手动 cache 维护
-- 帧缓冲置于 **AXI SRAM**，**不用 DTCM**（DMA2D/LTDC 访问不到）
-- LTDC 图层地址 **32 字节对齐**
-- 中文字体 **编译期子集化**为位图字库，按场景模板实际字符串裁剪
-- 通用性来自 **L0-L2 分级**，**L3 原生代码装载禁止**
-- 场景模板是**编译期唯一入口**，单一声明式文件
+- The device **has a screen** but does not render HTML; display goes through **L8 indexing + a 256-entry CLUT**
+- The L8 framebuffer is **Non-Cacheable** (MPU configuration), no manual cache maintenance
+- The framebuffer sits in **AXI SRAM**, **not in DTCM** (DMA2D/LTDC cannot reach it)
+- LTDC layer addresses are **32-byte aligned**
+- Chinese fonts are **subsetted at compile time** into a bitmap font library, trimmed to the strings the scenario template actually uses
+- Generality comes from the **L0-L2 tiers**, and **L3 native code loading is forbidden**
+- The scenario template is the **single compile-time entry point**, one declarative file
 
-### 6.2 已定（第三轮，四项决策 + 硬件平台）
+### 6.2 Decided (Third Round: Four Decisions + Hardware Platform)
 
-| 决策项 | 结论 | 理由摘要 |
+| Decision | Conclusion | Reason Summary |
 |---|---|---|
-| L2 Wasm 插件层 | **做** | wasmi 现成（Rust / no_std / fuel + 内存页双上界 / 两次外部审计）；保住通用性且不破坏「应用集固定」 |
-| 设备 API | **Plan 9 式** | 命名空间 + ctl 文本文件 + 每进程私有命名空间；改阻塞语义为非阻塞消息传递以适配硬实时 |
-| 准入判据 | **混合** | 实时面用静态 WCET（sound）；管理面用测量式 MBTA + EVT（轻） |
-| 形式化验证范围 | **只验证调度器核心不变式** | 走 UCSB 的 retrofit 路径（给既有系统外科式加验证），不追全内核证明 |
+| L2 Wasm plugin tier | **Do it** | wasmi is ready-made (Rust / no_std / fuel + memory page, two upper bounds / two external audits); it keeps generality without breaking the "fixed application set" |
+| Device API | **Plan 9 style** | Namespace + ctl text files + a private namespace per process; blocking semantics changed to non-blocking message passing to fit hard real-time |
+| Admission criteria | **Hybrid** | The real-time plane uses static WCET (sound); the management plane uses measurement-based MBTA + EVT (light) |
+| Scope of formal verification | **Verify only the scheduler's core invariants** | Follow the UCSB retrofit path (adding verification surgically to an existing system), do not chase a whole-kernel proof |
 
-**硬件平台（第三轮修订）**：
+**Hardware platform (revised in the third round)**:
 
-- **主力平台：STM32N647 + 4.3" RGB LCD（ATK-MD0430R）**
-  - Cortex-M55 800MHz、4.2MB 内置 SRAM、32MB HyperRAM、32MB NOR Flash
-  - LTDC 并行 RGB 直驱，**原生 L8 + 每层 256 项 CLUT**
-  - GT911 电容触摸（I2C + 外部中断，5 点，**无需校准**）
-  - 800×480 L8 双缓冲 768KB，内置 SRAM 放得下
-  - **刷屏 CPU 零参与 ⇒ 对实时性影响近乎为零**
-- **成本档位平台：STM32H723 + ST7789**
-  - 550MHz、564KB RAM、有 MPU（**更正第一轮误判**）
-  - SPI 屏无 CLUT ⇒ 需软件展开为 RGB565，**总线竞争成为干扰源**
-  - 定位为低档位场景模板，非 L8+CLUT 验证平台
-- 两块板覆盖**两种显示后端**，由场景模板选择——这正是模板体系的用武之地
+- **Main platform: STM32N647 + 4.3" RGB LCD (ATK-MD0430R)**
+  - Cortex-M55 800MHz, 4.2MB built-in SRAM, 32MB HyperRAM, 32MB NOR Flash
+  - LTDC parallel RGB direct drive, **native L8 + a 256-entry CLUT per layer**
+  - GT911 capacitive touch (I2C + external interrupt, 5 points, **no calibration needed**)
+  - 800×480 L8 double buffering 768KB, it fits in the built-in SRAM
+  - **Zero CPU participation in screen refresh ⇒ near-zero impact on real-time performance**
+- **Cost-tier platform: STM32H723 + ST7789**
+  - 550MHz, 564KB RAM, has an MPU (**correcting the first round's misjudgment**)
+  - The SPI panel has no CLUT ⇒ it needs software expansion to RGB565, and **bus contention becomes a source of interference**
+  - Positioned as the low-tier scenario template platform, not the L8+CLUT validation platform
+- The two boards cover **two display backends**, selected by the scenario template — this is exactly where the template system earns its keep
 
-### 6.3 仍待定（工程细节层，不阻塞启动）
+### 6.3 Still Open (engineering detail level, does not block startup)
 
-1. **Verus 证明的具体不变式清单**：建议起步只证三条
-   （① 上下文切换后寄存器状态完整；② 优先级继承无死锁；③ 准入控制不超容量）。
-2. **可调度性分析工具链**：自研响应时间分析器，还是移植 Linux 的 CBS/`SCHED_DEADLINE` 语义。
-3. **Wasm 宿主 ABI 的资源声明格式**：fuel 与内存页上界如何在场景模板中表达。
-4. **非阻塞设备 API 的具体语义**：`/dev/xxx/read` 返回「数据未就绪」还是「部分数据 + 后续等待」，
-   需与 Plan 9 的 `ctl` 文本风格统一。
-5. **H723 是否保留为正式支持的第二平台**，还是仅作实验床。
+1. **The concrete list of invariants to prove in Verus**: the recommendation is to start with only three
+   (① register state is intact after a context switch; ② priority inheritance has no deadlock; ③ admission control does not exceed capacity).
+2. **Schedulability analysis toolchain**: build a response-time analyzer in-house, or port Linux's CBS/`SCHED_DEADLINE` semantics.
+3. **Resource declaration format for the Wasm host ABI**: how the fuel and memory page upper bounds are expressed in the scenario template.
+4. **The precise semantics of the non-blocking device API**: does `/dev/xxx/read` return "data not ready" or "partial data + wait for more",
+   and it must be unified with Plan 9's `ctl` text style.
+5. **Whether the H723 is kept as an officially supported second platform**, or serves only as an experimental testbed.
 
 ---
 
-## 七、引用来源
+## Seven: Sources
 
-| 结论 | 来源 |
+| Conclusion | Source |
 |---|---|
-| H723 有 MPU、564KB RAM、550MHz | ST 官方 STM32H723VG 产品页与 DS13313 数据手册 |
-| DMA2D 支持 indexed 模式与专用 CLUT 存储 | STM32H723/H735 数据手册 3.13 Chrom-ART Accelerator 章节 |
-| **LTDC 原生支持 L8 + 每层 256×24bit CLUT** | STM32 LTDC 手册（wiki.st.com LTDC 特性页）；野火/正点原子 LTDC 中文资料 |
-| D-Cache 与 DMA 一致性问题及四种解法 | ST 应用笔记 DM00272913《Level 1 cache on STM32F7/H7 series》 |
-| DMA 访问不到 DTCM、缓存策略混用导致鬼影 | ST 社区《DMA is not working on STM32H7 devices》《Granular D-Cache maintenance operations cause artefacts or hardfaults》 |
-| LTDC 对齐要求与缓存配置实践 | STM32 社区与 lpqz.cn《STM32H743 驱动 RGB 屏：LTDC 与 DMA2D 硬件加速实战》 |
-| **ST7789 无 indexed 模式与 CLUT** | ST7789V 手册 COLMOD(0x3A) 定义；多个驱动实现案例（仅 0x05/0x06/12bit） |
-| **N647 板载 4.3 寸 RGB LCD + GT911** | 正点原子 N647 官方 wiki（触摸屏实验章节）、ATK-MD0430R 模块仓库 README |
-| N6 的 Chrom-GRC / Neo-Chrom / 4.2MB RAM | STM32N647xx 数据手册 3.12/3.13/3.30 章节；ST 官方博客 |
-| 中文字体体积实测 | LVGL / NXP GUI Guider / U8g2 实战案例（16px 全量 2.8MB、20902 字符 2.1MB、500 汉字 142KB、32 汉字约 1KB） |
-| wasmi 能力与审计 | lib.rs/crates/wasmi、hysenlabs 项目页、wasmi GitHub README（审计报告 PDF 已提交仓库） |
-| Plan 9 私有命名空间与 9P 设计 | vectree.io Plan 9 词条、drewdevault.com《In praise of Plan 9》、9p.io 架构资料 |
-| NuttX 配置负担与最小体积 | everythingxiaomi.com NuttX 评测、hivebook.wiki Apache NuttX 词条 |
-| ESPHome 编译期模型与规模 | esphome.io 官方文档 |
-| Zephyr 4.5 SPDX 3.0 SBOM | zephyrproject.org 4.5 发布公告（2026-10-28） |
-
+| The H723 has an MPU, 564KB RAM, 550MHz | ST's official STM32H723VG product page and the DS13313 datasheet |
+| DMA2D supports indexed mode and dedicated CLUT storage | STM32H723/H735 datasheet, section 3.13 Chrom-ART Accelerator |
+| **The LTDC natively supports L8 + a 256×24bit CLUT per layer** | STM32 LTDC manual (wiki.st.com LTDC feature page); EmbedFire / ALIENTEK Chinese-language LTDC material |
+| The D-Cache and DMA coherency problem and its four solutions | ST application note DM00272913《Level 1 cache on STM32F7/H7 series》 |
+| DMA cannot reach DTCM, mixed cache policies cause ghosting | ST community《DMA is not working on STM32H7 devices》《Granular D-Cache maintenance operations cause artefacts or hardfaults》 |
+| LTDC alignment requirements and cache configuration practice | STM32 community and lpqz.cn《Driving an RGB display with STM32H743: hands-on with LTDC and DMA2D hardware acceleration》 |
+| **The ST7789 has no indexed mode and no CLUT** | ST7789V manual COLMOD(0x3A) definition; several driver implementation cases (only 0x05/0x06/12bit) |
+| **The N647 board carries a 4.3-inch RGB LCD + GT911** | The official ALIENTEK N647 wiki (touchscreen experiment chapter), the ATK-MD0430R module repository README |
+| N6's Chrom-GRC / Neo-Chrom / 4.2MB RAM | STM32N647xx datasheet sections 3.12/3.13/3.30; the ST official blog |
+| Measured Chinese font sizes | LVGL / NXP GUI Guider / U8g2 field cases (16px full set 2.8MB, 20902 characters 2.1MB, 500 Chinese characters 142KB, 32 Chinese characters about 1KB) |
+| wasmi capabilities and audits | lib.rs/crates/wasmi, the hysenlabs project page, the wasmi GitHub README (audit report PDFs committed to the repository) |
+| Plan 9 private namespaces and the 9P design | The vectree.io Plan 9 entry, drewdevault.com《In praise of Plan 9》, 9p.io architecture material |
+| NuttX configuration burden and minimum size | The everythingxiaomi.com NuttX review, the hivebook.wiki Apache NuttX entry |
+| ESPHome's compile-time model and scale | The official esphome.io documentation |
+| Zephyr 4.5 SPDX 3.0 SBOM | The zephyrproject.org 4.5 release announcement (2026-10-28) |
