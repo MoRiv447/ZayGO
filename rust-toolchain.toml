@@ -1,0 +1,7 @@
+[toolchain]
+channel = "stable"
+targets = ["thumbv7em-none-eabihf"]
+components = ["rustfmt", "clippy"]
+
+# 最低支持版本：1.88 —— `#[unsafe(naked)]` + `core::arch::naked_asm!` 在此版本稳定。
+# 更低版本需要 nightly 的 `naked_functions` feature。

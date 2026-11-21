@@ -25,11 +25,30 @@ use rtt_target::{rprintln, rtt_init_print};
 /// | `Mode::Idle`  | 实验 1 基线        |
 /// | `Mode::Spin`  | 实验 2 满载 CPU    |
 /// | `Mode::Web`   | 实验 3 模拟 Web    |
-const MODE: load::Mode = load::Mode::Idle;
+const MODE: load::Mode = load::Mode::Web;
+
+/// 让调试口在 WFI / Sleep 期间保持在线。
+///
+/// 实测教训：`DBGMCU_CR.DBG_SLEEP`（bit 0）复位默认是 0，
+/// 核心一进 WFI 调试时钟就停，SWD 立刻失联 ——
+/// probe-rs 报 "Target device responded with a FAULT response"，
+/// 之后连 CPUID 都读不到，必须 `probe-rs reset --connect-under-reset` 才能救回来。
+///
+/// exp01 的 Idle 模式让负载任务长期 WFI，不置这一位就采不到任何数据。
+///
+/// DBGMCU 基址是 **0x5C001000**（H7 特有，不是 F4/F7 的 0xE0042000——
+/// 后者在这块芯片上读出全 0），CR 在 +0x04。
+unsafe fn keep_debug_in_sleep() {
+    let cr = 0x5C00_1004 as *mut u32;
+    cr.write_volatile(cr.read_volatile() | 1);
+}
 
 #[entry]
 fn main() -> ! {
-    rtt_init_print!();
+    // 默认模式是 NoBlockSkip —— 主机来不及搬就静默丢包（实测 8192 条只剩 ~5690 条）。
+    // BlockIfFull 会阻塞等待主机，只影响采样结束后的输出阶段，不污染任何测量值。
+    // 宏的形参是 `$mode:path`，所以必须写完整路径，不能只写 BlockIfFull。
+    rtt_init_print!(rtt_target::ChannelMode::BlockIfFull, 4096);
 
     rprintln!("=== exp01: 抢占式调度器干扰量化 ===");
     rprintln!("# CPU {} Hz（复位默认 HSI，未配 PLL）", time::CPU_HZ);
@@ -37,6 +56,11 @@ fn main() -> ! {
     rprintln!("# 模式 {:?}", MODE as u8);
 
     time::init();
+
+    // 必须在任何 WFI 之前完成，否则调试口先失联就再也改不了了
+    unsafe {
+        keep_debug_in_sleep();
+    }
 
     // SysTick 必须在调度器初始化之后才能开：init 里设置的是中断优先级，
     // 顺序反了会让第一次 tick 落在一个尚未配置好 PendSV 优先级的系统上。
@@ -63,5 +87,43 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     rprintln!("PANIC: {}", info);
     loop {
         cortex_m::asm::bkpt();
+    }
+}
+
+/// 故障取证。
+///
+/// 为什么值得专门写：HardFault 的默认行为是死循环，什么也不说。
+/// 而 CFSR/MMFAR/BFAR + 异常帧能直接指认是哪种 fault、哪条指令、哪个地址。
+/// 没有这些，只能靠反汇编猜。
+///
+/// `ExceptionFrame` 由 cortex-m-rt 自动取出：它已经是硬件压栈后的那 8 个字，
+/// 不需要自己算 MSP/PSP 偏移。
+#[cortex_m_rt::exception]
+unsafe fn HardFault(ef: &cortex_m_rt::ExceptionFrame) -> ! {
+    let cfsr = (0xE000_ED28 as *const u32).read_volatile();
+    let hfsr = (0xE000_ED2C as *const u32).read_volatile();
+    let mmfar = (0xE000_ED34 as *const u32).read_volatile();
+    let bfar = (0xE000_ED38 as *const u32).read_volatile();
+
+    rprintln!("=== HARDFAULT ===");
+    rprintln!("# pc   {:#010x}", ef.pc());
+    rprintln!("# lr   {:#010x}", ef.lr());
+    rprintln!("# xpsr {:#010x}", ef.xpsr());
+    rprintln!("# r0 {:#010x} r1 {:#010x} r2 {:#010x} r3 {:#010x}",
+        ef.r0(), ef.r1(), ef.r2(), ef.r3());
+    rprintln!("# r12 {:#010x}", ef.r12());
+    rprintln!("# cfsr {:#010x} hfsr {:#010x}", cfsr, hfsr);
+    rprintln!("# mmfar {:#010x} bfar {:#010x}", mmfar, bfar);
+    rprintln!("# sp_load {:#010x} sp_rt {:#010x}",
+        sched::sp_of(0), sched::sp_of(1));
+
+    // 关掉 SysTick，避免后续 tick 继续制造状态变化，污染现场。
+    // 然后死等 —— 刻意不用 bkpt：bkpt 会让核心 halt，probe-rs 收到 halt 就退出，
+    // RTT 缓冲区里还没被搬走的输出会全部丢失。wfi 空转则让 probe-rs 继续在线收数据。
+    unsafe {
+        (0xE000_E010 as *mut u32).write_volatile(0);
+    }
+    loop {
+        cortex_m::asm::wfi();
     }
 }

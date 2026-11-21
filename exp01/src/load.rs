@@ -9,7 +9,7 @@ use core::sync::atomic::{AtomicU8, Ordering};
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Mode {
-    /// L-A 基线：负载任务只 `wfi`，CPU 基本空闲。
+    /// L-A 基线：极轻空转（只有取指与分支，无内存访问）。
     Idle = 0,
     /// L-B 满载：纯算术死循环，不碰内存。
     Spin = 1,
@@ -37,8 +37,25 @@ fn mode() -> Mode {
 pub fn load_iteration() {
     match mode() {
         Mode::Idle => {
-            // 睡到下一个中断。这是唯一"不占 CPU"的基线模式。
-            cortex_m::asm::wfi();
+            // 原本这里用 `wfi()` 表示"完全空闲"。实测这条路走不通：
+            // 核心一进 Sleep，SWD 调试时钟就停，probe-rs 立刻报
+            // "Target device responded with a FAULT response" 并失联，
+            // 连 `probe-rs read` 都读不到，只能 connect-under-reset 救回来。
+            //
+            // 已试过置 DBGMCU_CR.DBG_SLEEP=1（见 main.rs 的 keep_debug_in_sleep），
+            // 仍未解决 —— 具体原因待查，可能是 H7 的 D3 域调试时钟另有开关。
+            //
+            // 改用极轻空转，三个理由：
+            // 1) 不产生内存访问、不占总线，对实时任务的干扰最小；
+            // 2) 反而更纯粹 —— 排除了 WFI 唤醒延迟，测到的就是调度本身的开销；
+            // 3) 三种模式因此都是"忙等"，对比是同口径的，不会把休眠/唤醒的
+            //    差异混进"负载差异"里。
+            //
+            // 代价：这不是真正的"空闲系统"，功耗也不为零。作为调度延迟基线够用。
+            for _ in 0..8 {
+                cortex_m::asm::nop();
+            }
+            core::hint::black_box(());
         }
         Mode::Spin => spin_round(),
         Mode::Web => web_round(),

@@ -10,9 +10,14 @@ target/
 .idea/
 *.swp
 
+# Python
+__pycache__/
+*.pyc
+
 # 实验输出
-*.csv
-/flash-backup.*
+# 注意：exp01/out-*.csv 是**实测原始数据**，属于证据，故意入库。
+# probe-rs 每次运行会覆盖它们，git diff 就能看出数据变化。
+flash-backup.*
 
 # OS
 Thumbs.db

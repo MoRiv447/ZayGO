@@ -156,19 +156,82 @@ PLL 配错会直接挂死且没有任何输出，调试成本极高。而本实�
   ```
 - 向量表偏移 0x38 → `0x08000459`（PendSV）、0x3C → `0x08000477`（SysTick）
 - 初始 SP = `0x24050000`（RAM 末尾），`.bss` 74KB / 320KB
+- **上板跑通：三个模式各 8192 样本全部采集成功，overruns=0**
 
-**尚未上板验证。** 首次运行的预期输出：
+### 实测结果（64 MHz，未配 PLL，未开 cache）
+
+| 模式 | p50 | p99.9 | max（稳态） | mean |
+|---|---|---|---|---|
+| Idle | 229 cyc / 3.58 µs | 234 | 234 | 231.5 |
+| Spin | 226 cyc / 3.53 µs | 226 | 235 | 226.0 |
+| Web | 234 cyc / 3.66 µs | 234 | 234 | 232.3 |
+
+- **负载类型几乎不影响调度延迟**（差异 ≤ 2.8%）
+- **p50 = p99.9 = max，零长尾**
+- 首次调度 415–431 周期是冷启动伪影（I-Cache 空），已从统计中排除
+- 周期抖动峰峰值约 220 周期 = 3.5 µs
+
+判读与实验局限见 `docs/EXPERIMENT-01.md` 第七节。
+
+## 上板踩过的四个坑（都会静默失败，值得记住）
+
+### 坑 1：SHPR3 位段写反 → 首次中断即 HardFault
+
+`SHPR3`（`0xE000ED20`）的布局：
+
+| 位段 | 异常 |
+|---|---|
+| `bits[23:16]` | **PendSV**（异常 14） |
+| `bits[31:24]` | **SysTick**（异常 15） |
+
+写反的后果不是"性能略差"，而是**直接崩**：
+
+1. `yield_now()` 在 SysTick 里置 PendSV pending
+2. PendSV 优先级变成最高 → **立刻抢占 SysTick**，形成嵌套异常
+3. 入栈的是 Handler 模式现场（在 MSP 上），而 naked 处理器只按 **PSP** 保存 r4-r11
+4. 现场全错 → `bx lr` 拿到 `0xFFFFFFF1`（返回 Handler 模式）→ **INVPC**
+
+**识别指纹**：保存的上下文第一个字是 `0xFFFFFFF1` 而非 `0xFFFFFFFD`，
+且保存的 `r7` 紧贴 MSP 顶（`0x2404FFB8` 一类地址）。
+
+**取证路径**：读 `CFSR`（`0xE000ED28`）→ UFSR bit2 = INVPC；
+再读 `SHPR3` 看实际优先级；最后 dump 任务保存的完整上下文。
+
+### 坑 2：`wfi` 会让 SWD 调试口失联
+
+`DBGMCU_CR.DBG_SLEEP`（bit 0）复位默认 0，核心一进 WFI 调试时钟就停：
 
 ```
-=== exp01: 抢占式调度器干扰量化 ===
-# CPU 64000000 Hz（复位默认 HSI，未配 PLL）
-# 周期 1ms，样本上限 8192
-# 模式 0
-# 启动
+WARN  Could not clear all hardware breakpoints: ... FAULT response
+Error: An ARM specific error occurred.
 ```
 
-看到 `# 启动` 说明调度器已经跑起来了。若卡在 `# 启动` 之前，
-说明在初始化阶段 fault，需要用调试器 halt 看 PC。
+随后连 `probe-rs read` 都读不到，必须 `probe-rs reset --connect-under-reset` 才能恢复。
+
+已尝试置位 `DBGMCU_CR`（`0x5C001004` |= 1），**未能解决**，原因待查
+（可能是 H7 的 D3 域调试时钟另有开关）。
+
+⇒ Idle 模式改用 8×nop 空转。附带好处：排除 WFI 唤醒延迟，三种模式同口径可比。
+
+> **DBGMCU 基址**：H7 是 `0x5C001000`，**不是** F4/F7 的 `0xE0042000`
+> （后者在这块芯片上读出全 0）。
+
+### 坑 3：RTT 默认模式静默丢包
+
+`rtt_init_print!()` 默认是 **`NoBlockSkip`** —— 主机搬不过来就丢。
+实测 8192 条样本只出来约 5690 条，**且没有任何报错**。
+
+修法：`rtt_init_print!(rtt_target::ChannelMode::BlockIfFull, 4096)`
+
+- 宏的形参是 `$mode:path`，不能只写 `BlockIfFull`
+- 阻塞只发生在采样结束后的输出阶段，不污染测量值
+
+### 坑 4：probe-rs 给 RTT 输出加时间戳前缀
+
+实际输出是 `21:01:17.115: 0,431,0`，不是 `0,431,0`。
+`parse.py` 必须先用正则剥掉 `^\d{2}:\d{2}:\d{2}\.\d+:\s*`，
+否则 `int()` 全部抛异常、样本被当噪声静默跳过。
+
 
 ## 首次上板排查清单
 

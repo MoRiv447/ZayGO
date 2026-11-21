@@ -1,0 +1,42 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  firmware:
+    name: 编译固件 (thumbv7em-none-eabihf)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabihf
+
+      # 必须进 exp01 目录：.cargo/config.toml 里设的 target 与 linker 参数
+      # 是按「从当前目录向上查找配置」规则生效的，在仓库根目录跑会找不到。
+      - name: cargo build
+        working-directory: exp01
+        run: cargo build --release
+
+      - name: 上传固件
+        uses: actions/upload-artifact@v4
+        with:
+          name: exp01-firmware
+          path: exp01/target/thumbv7em-none-eabihf/release/exp01
+
+  analysis:
+    name: 分析脚本自检
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      # parse.py 必须能在没有样本文件时不崩溃
+      - name: 语法检查
+        run: python -m py_compile exp01/analysis/parse.py

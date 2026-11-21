@@ -60,18 +60,27 @@ pub fn init() {
         aircr.write_volatile((0x05FA << 16) | (0 << 8));
     }
 
-    // SHPR3：bit16-23 = SysTick 优先级，bit24-31 = PendSV 优先级。
-    // 复位后所有异常优先级都是 0（最高），**必须显式改**：
-    //   - SysTick 保持 0，保证能抢占任务
-    //   - PendSV 设为最低，保证切换不打断任何中断处理
-    // 漏掉这一步的典型症状：切换偶尔在中断里发生，任务栈被踩。
+    // SHPR3 (0xE000ED20) 的位段布局极易记反，这里写明：
+    //   bits[23:16] = PendSV  (异常 14)
+    //   bits[31:24] = SysTick (异常 15)
+    //
+    // 本项目要求：PendSV 最低（0xFF）、SysTick 最高（0x00）。
+    //
+    // 写反的后果不是"性能略差"，而是直接崩：
+    //   yield_now() 在 SysTick 里置 PendSV pending → PendSV 优先级最高，
+    //   立刻抢占 SysTick → 变成嵌套异常，入栈的是 Handler 模式现场（MSP），
+    //   而 naked 处理器只按 PSP 保存 r4-r11 → 现场全错，
+    //   最终 LR 变成 0xFFFFFFF1（返回 Handler 模式）→ bx lr → INVPC。
+    //   指纹：保存的 r7 紧贴 MSP 顶（0x2404FFB8 一类地址）。
+    //
+    // 复位后所有异常优先级都是 0（最高），必须显式改，否则同样会抢占。
     unsafe {
         let shpr3 = 0xE000_ED20 as *mut u32;
         let mut v = shpr3.read_volatile();
         v &= !(0xFFu32 << 16);
-        v |= 0x00 << 16;
+        v |= 0xFF << 16; // PendSV  → 最低
         v &= !(0xFFu32 << 24);
-        v |= 0xFF << 24;
+        v |= 0x00 << 24; // SysTick → 最高
         shpr3.write_volatile(v);
     }
 }
@@ -91,6 +100,11 @@ pub fn start() -> ! {
     loop {
         yield_now();
     }
+}
+
+/// 读取任务保存的栈指针。仅供故障诊断使用。
+pub fn sp_of(i: usize) -> u32 {
+    unsafe { SP[i] }
 }
 
 /// 主动让出 CPU。返回时表示「又被调度上来了」。
