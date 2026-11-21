@@ -1,5 +1,8 @@
 # ZayGO
 
+[![CI](https://github.com/MoRiv447/ZayGO/actions/workflows/ci.yml/badge.svg)](https://github.com/MoRiv447/ZayGO/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 > 中文版。 [English version](README.md)
 
 > 面向高性能 MCU 的实时平台：**应用集固定、分级可扩展、整体可验证**。

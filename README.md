@@ -1,5 +1,8 @@
 # ZayGO
 
+[![CI](https://github.com/MoRiv447/ZayGO/actions/workflows/ci.yml/badge.svg)](https://github.com/MoRiv447/ZayGO/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 > English version. [中文版](README.zh-CN.md)
 >
 > A real-time platform for high-performance MCUs: **fixed application set, tiered extensibility,
