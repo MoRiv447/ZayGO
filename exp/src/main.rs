@@ -105,6 +105,9 @@ fn main() -> ! {
         keep_debug_in_sleep();
     }
 
+    // 以下这行必须在切换之前输出 —— 切换之后任何打印都可能阻塞。
+    rprintln!("# 即将配置时钟");
+
     // 时钟必须在 time::init 之前定下来：CYCCNT 清零的时刻要与最终频率一致，
     // 否则所有周期数与时间的换算都会偏。
     // 缓存必须在配时钟**之前**开。
@@ -123,7 +126,10 @@ fn main() -> ! {
     );
     if USE_PLL {
         match clock::init(PLL_TARGET, PLL_STAGE) {
-            Ok(hz) => rprintln!("# clock: PLL OK, CPU {} Hz", hz),
+            // **成功时不能打印**：此时可能已经跑在目标频率上，调试口若已失步，
+            // rprintln!（BlockIfFull）就会永久阻塞。成功与否由 results 里的
+            // cpu_hz 字段说明，不靠这行日志。
+            Ok(_hz) => {}
             Err(e) => rprintln!("# clock: PLL 配置失败（{}），继续跑 {} Hz", e, clock::cpu_hz()),
         }
     } else {
@@ -149,7 +155,6 @@ fn main() -> ! {
     syst.enable_interrupt();
     syst.enable_counter();
 
-    rprintln!("# 启动");
     sched::start();
 }
 

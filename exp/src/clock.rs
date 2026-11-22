@@ -205,6 +205,9 @@ pub fn init(target: Target, stage: Stage) -> Result<u32, &'static str> {
     use rtt_target::rprintln;
 
     // 目标参数：PLL 倍频、是否要 VOS0、Flash 等待周期、WRHIGHFREQ、HPRE、目标频率
+    // 哨兵：进入本函数先落一个唯一值，用于区分"本轮数据"与"上一轮残留"
+    crate::measure::mark(0, 0xC0DE_BEEF);
+
     let (plln, vos0, latency, wrhf, hpre, target_hz) = match target {
         // 200MHz：25/10*80/1。VOS 保持复位默认（VOS1 够用），AXI 200MHz 要 2 WS
         Target::M200 => (80u32, false, 2u32, 1u32, 1u32, 200_000_000u32),

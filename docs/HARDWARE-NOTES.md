@@ -738,3 +738,57 @@ Two properties were confirmed the hard way:
 - the block layout and `MAGIC` round-trip correctly.
 
 What is missing is a clock configuration that survives long enough to store anything.
+### Stopped here, on purpose
+
+The investigation was halted at this point rather than pushed further. The reason is not the
+difficulty of the remaining problem — it is that **the instrument kept producing contradictory
+readings**, and continuing would have produced more noise than knowledge.
+
+Concretely, with identical code, three consecutive runs reported:
+
+| Run | Last progress marker | Reading |
+|---|---|---|
+| A | `0xC0DE_0007` (dividers set) | died in or just after the divider writes |
+| B | `0xC0DE_0004` (HSE ready) | died before the PLL locked |
+| C | `0xC0DE_0004` (HSE ready), and the failure-path diagnostic never ran | died inside code that had just succeeded |
+
+The PLL itself locked in earlier runs with the same parameters (`CR=0x03034025`,
+`DIVR=0x010100db`), so B and C are not reproducible findings — they are symptoms of an
+environment that is no longer in a known state between runs.
+
+### What is actually established
+
+These hold up under repeated measurement:
+
+1. **The RCC can switch to PLL1 at 550 MHz.** With the core halted, the same register sequence
+   driven from the host reaches `SWS = PLL1` (`CFGR = 0x0000001b`). So the configuration is
+   correct and the target frequency is reachable on this board.
+2. **`rprintln!` can block forever and fake a hang.** RTT uses `BlockIfFull`; once the D3
+   prescaler change kills the debug link, the next print waits permanently. This invalidates
+   several earlier "the CPU died at the switch" observations.
+3. **`PWR_D3CR` VOS encoding**: `SCALE0` is `0b00`, not `0b11`. The original code wrote `SCALE1`
+   and reset is `SCALE3`, whose ceiling is around 200 MHz. Fixed and verified via `ACTVOS`.
+4. **Calling copied code requires bit 0 set** (Thumb). Calling an even address faults exactly like
+   a clock failure.
+
+### What is not established
+
+Whether the firmware can complete the switch while executing from flash at 400/550 MHz. Every
+attempt to answer it was confounded — by print blocking, by a stale `.uninit` block from a previous
+run short-circuiting the measurement, by an address that moved between builds, and finally by a
+chip whose state between runs is not reproducible.
+
+### The next step, when this is picked up again
+
+Not more register poking. In order:
+
+1. **Make runs independent.** Add an explicit "factory reset" at boot: clear the `.uninit` block
+   and write a boot counter, so a run can prove it started fresh. Several of the confusing results
+   above came from a stale block.
+2. **Make the instrument trustworthy before using it.** The progress-marker technique is sound —
+   it survives resets and flash erases and needs no debug link — but it needs a per-build nonce so
+   stale data can be recognised instantly. One `mark(0, NONCE)` would have saved hours.
+3. **Then, and only then**, re-ask the original question with zero printing.
+
+Doing 1 and 2 first is not bureaucracy: every wrong turn in this session traces back to skipping
+them.
