@@ -254,6 +254,11 @@ extern "C" fn rt_task() -> ! {
         if t_release != 0 {
             measure::record(t_start, t_release);
         }
+        // 控制请求在这里生效 —— 也就是"下一个控制周期"。
+        // 位置刻意放在时间戳记录之后：让 apply 的开销不污染延迟测量，
+        // 同时仍然属于本周期的工作。
+        crate::ctl::apply_pending();
+
         load::rt_work();
         clear_release();
 

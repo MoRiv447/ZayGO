@@ -13,6 +13,7 @@ mod cache;
 mod clock;
 mod cli;
 mod dev;
+mod ctl;
 mod uart;
 mod context;
 mod crit;

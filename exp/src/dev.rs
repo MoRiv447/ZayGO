@@ -62,7 +62,13 @@ pub static DEVICES: &[Device] = &[
         path: "/dev/led",
         read: None,
         write: Some(write_led),
-        note: "板载蓝灯 PG7；写 on/off/toggle",
+        note: "直接写 PG7，绕过实时面（对照用）",
+    },
+    Device {
+        path: "/dev/actuator/led/ctl",
+        read: Some(read_led_ctl),
+        write: Some(write_led_ctl),
+        note: "提交请求，由实时面在下一控制周期生效",
     },
 ];
 
@@ -180,6 +186,77 @@ fn read_log(w: &mut dyn Write) -> Result<(), ()> {
 const GPIOG: usize = 0x5802_1800;
 const RCC_AHB4ENR: usize = 0x5802_44E0;
 const ODR: usize = 0x14;
+
+/// 真正去动引脚。只能由实时任务调用（见 `ctl::apply_pending`）。
+pub fn led_apply(arg: u32) {
+    unsafe {
+        let r = RCC_AHB4ENR as *mut u32;
+        r.write_volatile(r.read_volatile() | (1 << 6));
+        let odr = (GPIOG + ODR) as *mut u32;
+        let cur = odr.read_volatile();
+        let bit = 1u32 << 7;
+        odr.write_volatile(match arg {
+            0 => cur & !bit,
+            1 => cur | bit,
+            2 => cur ^ bit,
+            _ => cur,
+        });
+    }
+}
+
+/// 把文本命令映射成参数。返回 None 表示不认识。
+fn parse_led(cmd: &str) -> Option<u32> {
+    match cmd {
+        "off" => Some(0),
+        "on" => Some(1),
+        "toggle" => Some(2),
+        _ => None,
+    }
+}
+
+/// `/dev/actuator/led/ctl` 写：**只入队**，立刻返回。
+///
+/// 引脚不会在这里被改动 —— 它在下一个控制周期由实时任务改。
+fn write_led_ctl(cmd: &str, w: &mut dyn Write) -> Result<(), ()> {
+    let Some(arg) = parse_led(cmd) else {
+        let _ = writeln!(w, "err: 只接受 on / off / toggle");
+        return Ok(());
+    };
+    match crate::ctl::submit(crate::ctl::KIND_LED, arg) {
+        Some(seq) => {
+            let _ = writeln!(w, "submitted seq={} (等待实时面确认)", seq);
+        }
+        None => {
+            let _ = writeln!(w, "err: 队列已满，请求被丢弃（不阻塞，这是有意的）");
+        }
+    }
+    Ok(())
+}
+
+/// `/dev/actuator/led/ctl` 读：提交/确认状态。
+fn read_led_ctl(w: &mut dyn Write) -> Result<(), ()> {
+    use core::sync::atomic::Ordering::Relaxed;
+    let acked = crate::ctl::ACKED.load(Relaxed);
+    let pending = crate::ctl::pending();
+    let _ = writeln!(w, "acked_seq     {}", acked);
+    let _ = writeln!(w, "pending       {}", pending);
+    let _ = writeln!(
+        w,
+        "dropped       {}",
+        crate::ctl::DROPPED.load(Relaxed)
+    );
+    let _ = writeln!(
+        w,
+        "last_latency  {} cycles",
+        crate::ctl::LAST_LATENCY.load(Relaxed)
+    );
+    let _ = writeln!(
+        w,
+        "max_latency   {} cycles",
+        crate::ctl::MAX_LATENCY.load(Relaxed)
+    );
+    Ok(())
+}
 
 fn write_led(cmd: &str, w: &mut dyn Write) -> Result<(), ()> {
     unsafe {

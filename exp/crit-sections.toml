@@ -35,6 +35,12 @@ purpose = "把一条样本写入环形缓冲，写入过程不能被中断看到
 budget_cycles = 120
 
 [[site]]
+name = "ctl_submit"
+file = "src/ctl.rs"
+purpose = "把一条控制请求塞进队列；消费者是实时任务，会在任意指令处抢占，索引必须互斥"
+budget_cycles = 200
+
+[[site]]
 name = "sweep_mask_stimulus"
 file = "src/load.rs"
 purpose = "实验 02 的合成激励：故意屏蔽到 96000 周期以演示丢 tick"

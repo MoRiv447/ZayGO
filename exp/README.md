@@ -338,7 +338,8 @@ Two defects surfaced only once it was exercised for real:
    nothing invoked it, so the port stayed silent. A whole device tree was "verified" through RTT
    while the actual console path had never been initialised.
 2. **`
-` was sent without ``.** `cli::UartWriter` called `uart::write_byte` directly, bypassing
+` was sent without `
+`.** `cli::UartWriter` called `uart::write_byte` directly, bypassing
    the CRLF expansion in `uart::Writer`. Terminals then advance without returning to column 0.
 
 Byte-level check after the fixes (`help`, 292 bytes):
@@ -380,3 +381,76 @@ The command actually moved a pin.
 "every write is a submitted request executed by the real-time plane, with an asynchronous ack"
 is the whole point of P1, and faking it with a direct `ODR` write would be worse than not having it.
 `/dev/led` is honest about what it is: a status indicator, not an actuator with a control loop.
+
+### The mechanism P1 exists for: submitted requests
+
+`/dev/actuator/led/ctl` does **not** write a pin. A write enqueues a request and returns:
+
+```
+zaygo> echo on > /dev/actuator/led/ctl
+submitted seq=1 (等待实时面确认)
+zaygo> cat /dev/actuator/led/ctl
+acked_seq     1
+pending       0
+dropped       0
+last_latency  2145 cycles
+max_latency   2145 cycles
+```
+
+The pin is changed later, by the **real-time task**, at the start of its next cycle:
+
+```rust
+// sched::rt_task, after the timestamp is recorded
+crate::ctl::apply_pending();
+```
+
+Putting it after the timestamp keeps `apply_pending`'s cost out of the latency measurement while
+still counting it as work of that cycle.
+
+### The claim that can be checked
+
+"Takes effect in the next control cycle" is a measurable statement, so it is measured. Over a run
+of submits:
+
+| metric | value |
+|---|---|
+| `last_latency` | 2145 / 25486 cycles |
+| `max_latency` | **46014 cycles** |
+| control period | 64000 cycles |
+
+**The submit-to-apply latency never exceeded one period.** That is the guarantee, expressed as a
+number rather than a sentence.
+
+### The cost is on the books
+
+Enqueuing has to be a critical section: the consumer is the real-time task and preempts the
+producer at any instruction. That masking cost is declared like every other one:
+
+```
+$ cat /stat/crit
+site                   budget   observed     viol
+sample_ring_push          120         50        0
+ctl_submit                200         34        0
+sweep_mask_stimulus     97000          0        0
+```
+
+34 cycles measured against a declared 200. The convenience of "submit a request" is not free, and
+the price is visible in the same table as everything else.
+
+### Backpressure is a drop, not a wait
+
+When the queue is full, `submit` returns `None` and the CLI says so:
+
+```
+err: 队列已满，请求被丢弃（不阻塞，这是有意的）
+```
+
+Blocking an untrusted caller would let it stall the real-time plane — the one outcome this design
+cannot allow. Dropping one request is the cheaper failure, and `dropped` is a counter, so a lossy
+producer is visible rather than silent.
+
+### `/dev/led` still exists, on purpose
+
+It writes PG7 immediately, in the caller's context, bypassing the queue. It is kept as the
+**control group**: the old, unsafe way. `ls` labels it `直接写 PG7，绕过实时面（对照用）` so nobody
+picks it up by accident.
