@@ -11,6 +11,9 @@
 
 mod cache;
 mod clock;
+mod cli;
+mod dev;
+mod uart;
 mod context;
 mod crit;
 mod load;
@@ -28,7 +31,7 @@ use rtt_target::{rprintln, rtt_init_print};
 /// | `Mode::Idle`  | 实验 1 基线        |
 /// | `Mode::Spin`  | 实验 2 满载 CPU    |
 /// | `Mode::Web`   | 实验 3 模拟 Web    |
-const MODE: load::Mode = load::Mode::Mask;
+const MODE: load::Mode = load::Mode::Cli;
 
 /// 是否切到 PLL 550MHz。实验 01/02/03 用 `false`（复位默认 HSI 64MHz），
 /// 实验 04 用 `true`。

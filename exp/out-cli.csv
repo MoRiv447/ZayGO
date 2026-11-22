@@ -1,0 +1,290 @@
+warning: exp@0.1.0: [mask-budget] max_mask_cycles = 800
+warning: exp@0.1.0: [mask-budget] longest declared non-exempt critical section = 120
+warning: exp@0.1.0: [mask-budget] headroom = 680 cycles
+warning: exp@0.1.0: [mask-budget] sites:
+warning: exp@0.1.0: [mask-budget]   sample_ring_push             120 cycles  把一条样本写入环形缓冲，写入过程不能被中断看到半成品
+warning: exp@0.1.0: [mask-budget]   sweep_mask_stimulus        97000 cycles  EXEMPT  实验 02 的合成激励：故意屏蔽到 96000 周期以演示丢 tick
+warning: unnecessary parentheses around function argument
+  --> src\uart.rs:71:60
+   |
+71 |         modify(GPIOA + PUPDR, (0b11 << 18) | (0b11 << 20), (0b01 << 18)); // RX 上拉
+   |                                                            ^          ^
+   |
+   = note: `#[warn(unused_parens)]` (part of `#[warn(unused)]`) on by default
+help: remove these parentheses
+   |
+71 -         modify(GPIOA + PUPDR, (0b11 << 18) | (0b11 << 20), (0b01 << 18)); // RX 上拉
+71 +         modify(GPIOA + PUPDR, (0b11 << 18) | (0b11 << 20), 0b01 << 18); // RX 上拉
+   |
+
+warning: unused import: `crate::cache`
+  --> src\measure.rs:26:5
+   |
+26 | use crate::cache;
+   |     ^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unnecessary `unsafe` block
+  --> src\uart.rs:61:5
+   |
+61 |     unsafe {
+   |     ^^^^^^ unnecessary `unsafe` block
+   |
+   = note: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+
+warning: unnecessary `unsafe` block
+   --> src\measure.rs:203:9
+    |
+203 |         unsafe { block().progress[step] = value };
+    |         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+   --> src\measure.rs:209:5
+    |
+209 |     unsafe { core::ptr::addr_of!(BLOCK) as u32 }
+    |     ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+   --> src\measure.rs:245:5
+    |
+245 |     unsafe {
+    |     ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+   --> src\measure.rs:253:25
+    |
+253 |     let (n, hz, mode) = unsafe {
+    |                         ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+   --> src\measure.rs:272:5
+    |
+272 |     unsafe {
+    |     ^^^^^^ unnecessary `unsafe` block
+
+warning: variant `I` is never constructed
+  --> src\main.rs:65:5
+   |
+61 | enum CacheMode {
+   |      --------- variant in this enum
+...
+65 |     I,
+   |     ^
+   |
+   = note: `CacheMode` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: constant `VOS_SCALE1` is never used
+  --> src\clock.rs:83:7
+   |
+83 | const VOS_SCALE1: u32 = 0b11 << 14;
+   |       ^^^^^^^^^^
+
+warning: variants `M200`, `M400`, `M400NoVos`, and `M200Axi200` are never constructed
+   --> src\clock.rs:122:5
+    |
+119 | pub enum Target {
+    |          ------ variants in this enum
+...
+122 |     M200,
+    |     ^^^^
+...
+128 |     M400,
+    |     ^^^^
+...
+133 |     M400NoVos,
+    |     ^^^^^^^^^
+...
+138 |     M200Axi200,
+    |     ^^^^^^^^^^
+    |
+    = note: `Target` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: field `dirty` is never read
+  --> src\cli.rs:30:9
+   |
+26 | pub struct Cli {
+   |            --- field in this struct
+...
+30 |     pub dirty: bool,
+   |         ^^^^^
+
+warning: method `clear_line` is never used
+  --> src\cli.rs:80:12
+   |
+33 | impl Cli {
+   | -------- method in this implementation
+...
+80 |     pub fn clear_line(&mut self) {
+   |            ^^^^^^^^^^
+
+warning: variant `Uart` is never constructed
+   --> src\cli.rs:198:5
+    |
+196 | pub enum Console {
+    |          ------- variant in this enum
+197 |     Rtt,
+198 |     Uart,
+    |     ^^^^
+    |
+    = note: `Console` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: constant `GPIOA` is never used
+  --> src\uart.rs:17:7
+   |
+17 | const GPIOA: usize = 0x5802_0000;
+   |       ^^^^^
+
+warning: constant `RCC_AHB4ENR` is never used
+  --> src\uart.rs:18:7
+   |
+18 | const RCC_AHB4ENR: usize = 0x5802_44E0;
+   |       ^^^^^^^^^^^
+
+warning: constant `RCC_APB2ENR` is never used
+  --> src\uart.rs:19:7
+   |
+19 | const RCC_APB2ENR: usize = 0x5802_44F0;
+   |       ^^^^^^^^^^^
+
+warning: constant `CR1` is never used
+  --> src\uart.rs:22:7
+   |
+22 | const CR1: usize = 0x00;
+   |       ^^^
+
+warning: constant `BRR` is never used
+  --> src\uart.rs:23:7
+   |
+23 | const BRR: usize = 0x0C;
+   |       ^^^
+
+warning: constant `CR1_UE` is never used
+  --> src\uart.rs:28:7
+   |
+28 | const CR1_UE: u32 = 1 << 0;
+   |       ^^^^^^
+
+warning: constant `CR1_RE` is never used
+  --> src\uart.rs:29:7
+   |
+29 | const CR1_RE: u32 = 1 << 2;
+   |       ^^^^^^
+
+warning: constant `CR1_TE` is never used
+  --> src\uart.rs:30:7
+   |
+30 | const CR1_TE: u32 = 1 << 3;
+   |       ^^^^^^
+
+warning: constant `MODER` is never used
+  --> src\uart.rs:35:7
+   |
+35 | const MODER: usize = 0x00;
+   |       ^^^^^
+
+warning: constant `OSPEEDR` is never used
+  --> src\uart.rs:36:7
+   |
+36 | const OSPEEDR: usize = 0x08;
+   |       ^^^^^^^
+
+warning: constant `PUPDR` is never used
+  --> src\uart.rs:37:7
+   |
+37 | const PUPDR: usize = 0x0C;
+   |       ^^^^^
+
+warning: constant `AFRH` is never used
+  --> src\uart.rs:38:7
+   |
+38 | const AFRH: usize = 0x24;
+   |       ^^^^
+
+warning: function `modify` is never used
+  --> src\uart.rs:51:4
+   |
+51 | fn modify(addr: usize, mask: u32, v: u32) {
+   |    ^^^^^^
+
+warning: function `init` is never used
+  --> src\uart.rs:60:8
+   |
+60 | pub fn init(fck: u32, baud: u32) {
+   |        ^^^^
+
+warning: struct `Writer` is never constructed
+   --> src\uart.rs:104:12
+    |
+104 | pub struct Writer;
+    |            ^^^^^^
+
+warning: static `SITE_PURPOSES` is never used
+  --> D:\OldStudy66\Zay\exp\target\thumbv7em-none-eabihf\release\build\exp-bb4bb20e27b55b81\out/crit_sites.rs:15:12
+   |
+15 | pub static SITE_PURPOSES: [&str; 2] = [
+   |            ^^^^^^^^^^^^^
+
+warning: `exp` (bin "exp") generated 30 warnings (run `cargo fix --bin "exp" -p exp` to apply 2 suggestions)
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.05s
+     Running `probe-rs run --chip STM32H723ZGTx 'target\thumbv7em-none-eabihf\release\exp'`
+     [38;5;10m[1mFinished[0m in 2.23s
+=== exp01: 抢占式调度器干扰量化 ===
+16:42:28.813: # CPU 64000000 Hz
+16:42:28.813: # 周期 1ms，样本上限 1024
+16:42:28.813: # 模式 4
+16:42:28.813: # uninit block at 0x24003680
+16:42:28.813: # 即将配置时钟
+16:42:28.813: # cache: icache=false dcache=false
+16:42:28.813: # clock: HSI (reset default) 64000000 Hz
+16:42:28.813: zaygo> help
+16:42:28.813: 命令：
+16:42:28.813:   ls                     列出所有设备
+16:42:28.813:   cat <path>             读一个设备
+16:42:28.813:   echo <text> > <path>   向设备提交内容
+16:42:28.813:   help                   这段说明
+16:42:28.813: 
+16:42:28.813: 所有写入都是「提交请求」，由实时面执行后确认；读取永不阻塞。
+16:42:28.813: zaygo> ls
+16:42:28.813: r-  /stat/sched          实时面运行快照
+16:42:28.813: r-  /stat/measure        采样缓冲状态
+16:42:28.813: r-  /stat/crit           中断屏蔽预算实测值
+16:42:28.813: rw  /dev/log             环形日志；满了丢最旧的，永不阻塞
+16:42:28.813: -w  /dev/led             板载蓝灯 PG7；写 on/off/toggle
+16:42:28.816: zaygo> cat /stat/sched
+16:42:28.816: cpu_hz        64000000
+16:42:28.816: overruns      0
+16:42:28.816: tick_missed   0
+16:42:28.816: samples       2
+16:42:28.816: zaygo> cat /stat/measure
+16:42:28.816: buffer        2/1024
+16:42:28.816: stages        8
+16:42:28.816: per_stage     128
+16:42:28.816: zaygo> cat /stat/crit
+16:42:28.816: declared_max  800 cycles
+16:42:28.816: site                   budget   observed     viol
+16:42:28.816: sample_ring_push          120         47        0
+16:42:28.816: sweep_mask_stimulus     97000          0        0
+16:42:28.816: zaygo> cat /dev/log
+16:42:28.816: (not ready)
+16:42:28.816: zaygo> echo first line > /dev/log
+16:42:28.818: ok, buffered
+16:42:28.818: zaygo> echo second line > /dev/log
+16:42:28.818: ok, buffered
+16:42:28.818: zaygo> cat /dev/log
+16:42:28.818:  1: first line
+16:42:28.818:  2: second line
+16:42:28.818: zaygo> cat /nope
+16:42:28.818: err: 没有这个设备: /nope
+16:42:28.818: zaygo> echo x > /stat/sched
+16:42:28.818: err: /stat/sched 是只读的
+16:42:28.818: zaygo> badcmd arg
+16:42:28.818: err: 未知命令 `badcmd`，输入 help 看用法
+16:42:28.818: zaygo> echo on > /dev/led
+16:42:28.818: ok
+16:42:28.818: zaygo> echo toggle > /dev/led
+16:42:28.818: ok
+16:42:28.818: zaygo> echo nonsense > /dev/led
+16:42:28.818: err: 只接受 on / off / toggle
+error: process didn't exit successfully: `probe-rs run --chip STM32H723ZGTx 'target\thumbv7em-none-eabihf\release\exp'` (exit code: 143)

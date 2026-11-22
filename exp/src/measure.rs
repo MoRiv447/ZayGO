@@ -23,7 +23,6 @@
 
 use rtt_target::rprintln;
 
-use crate::cache;
 use crate::crit;
 use crate::load;
 use crate::sched;

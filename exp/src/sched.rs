@@ -257,7 +257,9 @@ extern "C" fn rt_task() -> ! {
         load::rt_work();
         clear_release();
 
-        if load::is_sweep() {
+        if load::is_cli() {
+            // CLI 模式常驻：不 dump、不停机，采样缓冲写满就停写（record 内部会挡）
+        } else if load::is_sweep() {
             // 屏蔽扫描：每档采满就换下一档，最后一档采完输出
             if measure::is_stage_full() && !load::advance_stage() {
                 measure::dump_sweep();

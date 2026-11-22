@@ -21,6 +21,9 @@ pub enum Mode {
     Web = 2,
     /// 实验 02：在临界区里屏蔽中断 M 个周期，M 按 [`MASKS`] 逐档扫描。
     Mask = 3,
+    /// P1：串口 CLI。控制台跑在 LOAD 任务上 —— 它是"不可信负载"，
+    /// 慢、可能阻塞，但优先级最低，碰不到实时面。
+    Cli = 4,
 }
 
 /// 实验 02 的自变量：临界区屏蔽时长（周期数）。
@@ -42,8 +45,17 @@ fn mode() -> Mode {
         1 => Mode::Spin,
         2 => Mode::Web,
         3 => Mode::Mask,
+        4 => Mode::Cli,
         _ => Mode::Idle,
     }
+}
+
+/// 是否是交互式 CLI 模式。
+///
+/// 用它把调度器里的"采满就 dump 并停机"逻辑挡住 —— CLI 要一直活着，
+/// 不能因为采样缓冲满了就退出。
+pub fn is_cli() -> bool {
+    mode() == Mode::Cli
 }
 
 /// 是否处于屏蔽扫描模式。调度器用它决定采满一档后要不要换档。
@@ -99,6 +111,7 @@ pub fn load_iteration() {
         Mode::Spin => spin_round(),
         Mode::Web => web_round(),
         Mode::Mask => mask_round(),
+        Mode::Cli => crate::cli::poll(),
     }
 }
 
