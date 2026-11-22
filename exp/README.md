@@ -316,14 +316,39 @@ it may block on I/O, and it must not be able to touch the real-time plane.
 Measured: while 15 scripted commands executed back to back, `overruns = 0` and
 `tick_missed = 0`. The real-time task never noticed.
 
-### Console is an abstraction, and that is not decoration
+### Console is an abstraction, and both back ends are now verified
 
-`cli::out()` writes through a `Console` enum with two back ends: `Rtt` and `Uart`. The RTT back end
-exists because **there is no USB-TTL adapter here**, so the UART path cannot be exercised yet.
-The logic was verified end to end over RTT; the UART back end is written but **not verified on
-hardware** — USART1 shares the 2×4 header with SWD, so it needs a separate 3-wire hookup.
+`cli::out()` writes through a `Console` enum with two back ends: `Rtt` and `Uart`.
 
-Both facts are stated rather than glossed: the scripted replay below is real output from the board.
+An earlier version of this document claimed the UART path was unverified "because there is no
+USB-TTL adapter here". **That was wrong.** The DAPLink-style probe on this desk has an integrated
+USB-to-serial bridge, and it shows up in Windows as:
+
+```
+USB 串行设备 (COM16)   USB\VID_0D28&PID_0204&MI_00
+```
+
+Same VID/PID as the debug probe (`0d28:0204`), different interface. So a serial port was available
+the whole time; the assumption was never checked. With PA9/PA10 wired, `COM16` is USART1 at
+115200 8N1.
+
+Two defects surfaced only once it was exercised for real:
+
+1. **`uart::init()` was never called.** The driver was written and wired into the module tree, but
+   nothing invoked it, so the port stayed silent. A whole device tree was "verified" through RTT
+   while the actual console path had never been initialised.
+2. **`
+` was sent without ``.** `cli::UartWriter` called `uart::write_byte` directly, bypassing
+   the CRLF expansion in `uart::Writer`. Terminals then advance without returning to column 0.
+
+Byte-level check after the fixes (`help`, 292 bytes):
+
+```
+68 65 6c 70 0d 0a ... e8 af b4 e6 98 8e 0d 0a 0d 0a e6 89 80 ...
+h  e  l  p  CR LF     说   明              CR LF CR LF  所
+```
+
+UTF-8 and CRLF both correct, including the blank line between paragraphs.
 
 ```
 zaygo> ls

@@ -141,6 +141,14 @@ fn main() -> ! {
 
     time::init();
 
+    // 串口控制台初始化。
+    // fCK 传 APB2 时钟：当前 HSI 64MHz、D2PPRE2 分频为 /1（见 clock.rs），
+    // 所以 APB2 = 64MHz。若将来改了时钟或分频，这里必须同步改 ——
+    // 传错不会报错，只会看到乱码。
+    if cli::CONSOLE == cli::Console::Uart {
+        uart::init(time::cpu_hz(), 115_200);
+    }
+
 
     // SysTick 必须在调度器初始化之后才能开：init 里设置的是中断优先级，
     // 顺序反了会让第一次 tick 落在一个尚未配置好 PendSV 优先级的系统上。

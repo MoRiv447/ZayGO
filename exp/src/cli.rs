@@ -198,8 +198,14 @@ pub enum Console {
     Uart,
 }
 
-/// 当前控制台。改成 `Uart` 即切到串口。
-pub const CONSOLE: Console = Console::Rtt;
+/// 当前控制台。
+///
+/// 改为 `Uart` 后跑在 USART1（PA9/PA10），经 DAPLink 内置的 USB-TTL
+/// 出现在 COM16（`VID_0D28&PID_0204`，与探针同一 VID/PID）。
+pub const CONSOLE: Console = Console::Uart;
+
+/// 是否回放内置脚本。串口模式下关掉，以便真正测试交互输入。
+const RUN_SCRIPT: bool = false;
 
 struct RttWriter;
 impl Write for RttWriter {
@@ -212,10 +218,12 @@ impl Write for RttWriter {
 struct UartWriter;
 impl Write for UartWriter {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        for b in s.bytes() {
-            crate::uart::write_byte(b);
-        }
-        Ok(())
+        // 必须复用 uart::Writer —— 它负责把换行展开成 CRLF。
+        // 早先这里直接逐字节调 write_byte，少了回车，
+        // 表现是空行消失、相邻两行粘在一起（终端只下移不回行首）。
+        use core::fmt::Write as _;
+        let mut w = crate::uart::Writer;
+        w.write_str(s)
     }
 }
 
@@ -282,6 +290,13 @@ pub fn poll() {
                 cli: Cli::new(),
                 script_idx: 0,
             });
+            // 首次进入：打招呼并给出提示符。串口终端不会自己显示提示符，
+            // 不打印的话用户面对的是空白。
+            out(|w| {
+                let _ = writeln!(w, "");
+                let _ = writeln!(w, "zaygo CLI —— 输入 help 看用法");
+                let _ = write!(w, "{}", PROMPT);
+            });
         }
         let r = RUNNER.as_mut().unwrap();
 
@@ -308,7 +323,7 @@ pub fn poll() {
         }
 
         // 2) 脚本回放（每次只走一条，把执行摊到多轮里，避免长时间占住 LOAD 任务）
-        if r.script_idx < SCRIPT.len() {
+        if RUN_SCRIPT && r.script_idx < SCRIPT.len() {
             let cmd = SCRIPT[r.script_idx];
             r.script_idx += 1;
             out(|w| {
