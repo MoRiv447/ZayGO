@@ -309,17 +309,32 @@ Written down to prevent scope creep:
 
 ---
 
-## 7. The next three things
+## 7. What comes next
 
-1. **Experiment 02: sensitivity sweep over interrupt-masking duration** — the real criterion for
-   whether the bandwidth cap is required; experiment 01 never reached the scenario it targets.
+Experiment 02 is done (2026-11-22) and it changed what the next step should be.
+
+**What it established**: worst-case release delay grows 1:1 with interrupt-masking duration
+(99.4 %–100.6 % across seven stages), while the context-switch cost stays flat at 267 cycles.
+Masking beyond one period destroys phase lock outright (`tick_missed = 64`, `phase` uniform).
+
+**What that implies**: the bandwidth cap is not the mechanism that protects against this. Nothing
+in rate limiting stops a driver holding `cpsid i`. The guarantee that matters is **an upper bound
+on interrupt-masking duration, enforced at build time** — and that is a static property, which
+makes it far more tractable than runtime admission control.
+
+So the order changes:
+
+1. **Interrupt-masking budget as a build-time check** — measure or annotate the longest critical
+   section, emit it in the report, fail the build when it exceeds the period. This is the first
+   real deliverable of the "predictability" column.
 2. **Experiment 03: re-run with cache enabled** — cache is off after reset, real products enable
-   it, and enabling it changes the WCET characteristics.
-3. **Configure the PLL to 550 MHz and re-run** — the current absolute numbers (3.5 µs) cannot be
-   extrapolated to the target frequency.
+   it, and it changes the WCET characteristics of both dispatch and critical sections.
+3. **Configure the PLL to 550 MHz and re-run both experiments** — the current absolute numbers
+   (6.1 µs baseline, 1:1 slope) cannot be extrapolated to the target frequency, though the
+   structural 1:1 relationship should survive.
 
-Once these three are done, the architecture's "real-time plane budget" has real numbers and the
-template schema in P5 can be settled.
+With these three done, the architecture's "real-time plane budget" is expressed in the right unit
+(mask duration, not CPU percentage) and the P5 template schema can be settled.
 
 ---
 
@@ -362,7 +377,7 @@ The repository is public: **https://github.com/MoRiv447/ZayGO** (MIT, `main` bra
 
 ## Appendix B: The pitfalls hit so far
 
-The code-level pitfalls that **fail silently** are all written up in `exp01/README.md`. Only the
+The code-level pitfalls that **fail silently** are all written up in `exp/README.md`. Only the
 conclusions are repeated here:
 
 | Pitfall | Consequence | Lesson |

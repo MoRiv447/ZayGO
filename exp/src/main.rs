@@ -25,7 +25,7 @@ use rtt_target::{rprintln, rtt_init_print};
 /// | `Mode::Idle`  | 实验 1 基线        |
 /// | `Mode::Spin`  | 实验 2 满载 CPU    |
 /// | `Mode::Web`   | 实验 3 模拟 Web    |
-const MODE: load::Mode = load::Mode::Web;
+const MODE: load::Mode = load::Mode::Mask;
 
 /// 让调试口在 WFI / Sleep 期间保持在线。
 ///

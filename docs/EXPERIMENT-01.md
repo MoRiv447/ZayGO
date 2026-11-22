@@ -163,7 +163,7 @@ written for.
 | Risk anticipated at design time | Mitigation planned | What actually happened |
 |---|---|---|
 | DWT->CYCCNT inaccurate once D-Cache is on | Put the measurement code in ITCM, or read after `__DSB()` | Not exercised — cache was left off, so this stays untested |
-| RTT transfer jitter pollutes the measurement | Sample into a RAM ring buffer, dump afterwards | Sequence was right, but **the dump silently dropped about 30% of the samples** — see the RTT pitfall in `exp01/README.md` |
+| RTT transfer jitter pollutes the measurement | Sample into a RAM ring buffer, dump afterwards | Sequence was right, but **the dump silently dropped about 30% of the samples** — see the RTT pitfall in `exp/README.md` |
 | Context switch written wrong (state not fully saved) | Canary variables to validate after switching back | **This is the bug that actually hit** — though not through canaries. It was found by reading `CFSR` and the saved context. The canaries were never added |
 | SysTick 1 kHz itself jitters | Timestamp immediately at release, never defer | Fine: period p50 came out at exactly 64,000 cycles |
 | Compiler optimisation changes the timing | `#[inline(never)]` + volatile on the critical path | Fine: the naked function was verified by disassembly |
@@ -187,7 +187,7 @@ Stated honestly, to avoid later misuse:
 ## 5. What was actually delivered
 
 ```
-exp01/
+exp/
 ├── README.md / README.zh-CN.md
 ├── Cargo.toml / Cargo.lock
 ├── build.rs
@@ -310,5 +310,5 @@ That is the real criterion for "is bandwidth capping mandatory".
    However, the qualitative conclusion "the load type does not affect dispatch latency" does not depend on the frequency.
 3. **Single core, no concurrent DMA**: the CPU is the only master on the bus.
 4. **Idle mode is no longer truly idle**: the original design used `wfi`, but as measured, as soon as it entered Sleep the debug port lost contact
-   (see the pitfall record in `exp01/README.md`), so it was changed to an 8×nop idle spin. The cost is non-zero power,
+   (see the pitfall record in `exp/README.md`), so it was changed to an 8×nop idle spin. The cost is non-zero power,
    the benefit is that WFI wake-up latency is excluded and all three modes are directly comparable.

@@ -187,6 +187,36 @@ the bandwidth cap is required.
 Full interpretation and experimental limitations: section 7 of
 [`docs/EXPERIMENT-01.md`](docs/EXPERIMENT-01.md).
 
+### Experiment 02: interrupt-masking sensitivity (2026-11-22)
+
+Experiment 01's zero-interference result only held because the load never disabled interrupts.
+Experiment 02 asks the opposite question: **what happens when something does?**
+
+| mask (cycles) | `phase` p50 | `dispatch` p50 | Δ p50 vs M=0 | Δ/mask |
+|---|---|---|---|---|
+| 0 | 389 | 267 | 0 | — |
+| 500 | 891 | 267 | 502 | **100.4 %** |
+| 1000 | 1395 | 267 | 1006 | **100.6 %** |
+| 2000 | 2377 | 267 | 1988 | **99.4 %** |
+| 4000 | 4391 | 267 | 4002 | **100.1 %** |
+| 8000 | 8397 | 267 | 8008 | **100.1 %** |
+| 16000 | 16375 | 267 | 15986 | **99.9 %** |
+| 96000 | 32265 | 281 | — | phase lock lost |
+
+**Disabling interrupts for M cycles delays the worst-case task release by M cycles — one for
+one, with no safety factor.** Meanwhile `dispatch` never moves: masking delays *when the switch
+can begin*, not *how expensive the switch is*.
+
+Above one period the failure becomes qualitative rather than quantitative: `tick_missed = 64` and
+`phase` spreads uniformly across the period, because the release instant is no longer related to
+the data stream at all.
+
+This argues for **enforcing an upper bound on interrupt-masking duration at build time** — a more
+valuable and more tractable guarantee than the bandwidth cap, and one that fits a declarative
+scenario template. Full write-up: [`docs/EXPERIMENT-02.md`](docs/EXPERIMENT-02.md).
+
+---
+
 ---
 
 ## Where the project stands
@@ -195,7 +225,7 @@ Full interpretation and experimental limitations: section 7 of
 
 | Item | Evidence |
 |---|---|
-| `exp01` builds with zero warnings | rustc 1.97.1, `cargo build --release` |
+| `exp` builds with zero warnings | rustc 1.97.1, `cargo build --release` |
 | PendSV context switch is 9 instructions with no compiler-inserted prologue | disassembly checked line by line |
 | Vector table hooks up correctly | `0x38 → PendSV`, `0x3C → SysTick` |
 | Memory layout fits | initial SP `0x24050000`, `.bss` 74KB / 320KB |
@@ -228,7 +258,7 @@ bx    lr
 | Wasm plugin layer | not implemented |
 | L8 + CLUT display | not implemented (hardware support confirmed) |
 | Verus verification | not started |
-| Debug port dying on `wfi` | **unresolved** (see the pitfalls section of `exp01/README.md`) |
+| Debug port dying on `wfi` | **unresolved** (see the pitfalls section of `exp/README.md`) |
 
 ---
 
@@ -278,13 +308,13 @@ need for flashing.
 probe-rs chip list | grep -i h723
 ```
 
-Then edit `--chip` in `exp01/.cargo/config.toml`. The reference board is `STM32H723ZGT6`
+Then edit `--chip` in `exp/.cargo/config.toml`. The reference board is `STM32H723ZGT6`
 (1MB Flash / LQFP144).
 
 ### Run
 
 ```bash
-cd exp01
+cd exp
 cargo run --release          # defaults to Mode::Idle (the baseline)
 ```
 
@@ -325,7 +355,7 @@ ZayGO/
 │   ├── ARCHITECTURE.md    four planes, scenario templates, device API, display backends
 │   ├── HARDWARE-NOTES.md  board identity, pin assignment, USB Host power, capacitor selection
 │   └── EXPERIMENT-01.md   experiment design, measured results, interpretation
-└── exp01/
+└── exp/
     ├── src/
     │   ├── context.rs     naked context switch (9 instructions)
     │   ├── sched.rs       two-priority scheduler + SysTick release
@@ -347,7 +377,7 @@ ZayGO/
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Four planes, dual display backends, scenario templates, Plan 9-style device API |
 | [`docs/HARDWARE-NOTES.md`](docs/HARDWARE-NOTES.md) | Board identity, pin assignment, USB Host power circuit, capacitor selection |
 | [`docs/EXPERIMENT-01.md`](docs/EXPERIMENT-01.md) | Experiment design, measured results, interpretation and limitations |
-| [`exp01/README.md`](exp01/README.md) | Implementation details, **four hardware pitfalls hit**, troubleshooting checklist |
+| [`exp/README.md`](exp/README.md) | Implementation details, **four hardware pitfalls hit**, troubleshooting checklist |
 
 ---
 

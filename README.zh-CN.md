@@ -157,6 +157,32 @@ P0 的产出：自研最小抢占式调度器在 STM32H723（**64 MHz HSI，未�
 
 完整判读与实验局限见 [`docs/EXPERIMENT-01.md`](docs/EXPERIMENT-01.md) 第七节。
 
+### 实验 02：屏蔽中断的敏感度（2026-11-22）
+
+实验 01 的"零干扰"结论成立，只因为负载从不关中断。实验 02 问的是反面：**真有人关了，会怎样？**
+
+| mask（周期） | `phase` p50 | `dispatch` p50 | Δ p50（对 M=0） | Δ/mask |
+|---|---|---|---|---|
+| 0 | 389 | 267 | 0 | — |
+| 500 | 891 | 267 | 502 | **100.4%** |
+| 1000 | 1395 | 267 | 1006 | **100.6%** |
+| 2000 | 2377 | 267 | 1988 | **99.4%** |
+| 4000 | 4391 | 267 | 4002 | **100.1%** |
+| 8000 | 8397 | 267 | 8008 | **100.1%** |
+| 16000 | 16375 | 267 | 15986 | **99.9%** |
+| 96000 | 32265 | 281 | — | 相位锁定丢失 |
+
+**屏蔽 M 个周期，最坏释放延迟就增加 M 个周期 —— 一比一，没有安全系数。**
+而 `dispatch` 全程不动：屏蔽推迟的是**切换能开始的时刻**，不是**切换本身有多贵**。
+
+超过一个周期后，失效从量变转为质变：`tick_missed = 64`，`phase` 铺满整个周期，
+因为释放时刻与数据流已经彻底无关。
+
+这指向**在构建期强制中断屏蔽时长的上界** —— 比带宽上限更有价值也更可行，
+而且正好契合声明式场景模板。完整报告见 [`docs/EXPERIMENT-02.md`](docs/EXPERIMENT-02.md)。
+
+---
+
 ---
 
 ## 现在到哪一步了
@@ -165,7 +191,7 @@ P0 的产出：自研最小抢占式调度器在 STM32H723（**64 MHz HSI，未�
 
 | 项 | 证据 |
 |---|---|
-| `exp01` 编译通过，零警告 | rustc 1.97.1，`cargo build --release` |
+| `exp` 编译通过，零警告 | rustc 1.97.1，`cargo build --release` |
 | PendSV 上下文切换只有 9 条指令，编译器未插入序言 | 反汇编逐条核对 |
 | 向量表正确挂钩 | `0x38 → PendSV`、`0x3C → SysTick` |
 | 内存布局装得下 | 初始 SP `0x24050000`，`.bss` 74KB / 320KB |
@@ -198,7 +224,7 @@ bx    lr
 | Wasm 插件层 | 未实现 |
 | L8 + CLUT 显示 | 未实现（硬件支持已确认） |
 | Verus 验证 | 未开始 |
-| `wfi` 下调试口失联 | **未解决**（见 `exp01/README.md` 踩坑记录） |
+| `wfi` 下调试口失联 | **未解决**（见 `exp/README.md` 踩坑记录） |
 
 ---
 
@@ -245,12 +271,12 @@ Rust ≥ 1.88（需要 `#[unsafe(naked)]` + `naked_asm!`）。
 probe-rs chip list | grep -i h723
 ```
 
-改 `exp01/.cargo/config.toml` 里的 `--chip`。参考板为 `STM32H723ZGT6`（1MB Flash / LQFP144）。
+改 `exp/.cargo/config.toml` 里的 `--chip`。参考板为 `STM32H723ZGT6`（1MB Flash / LQFP144）。
 
 ### 跑
 
 ```bash
-cd exp01
+cd exp
 cargo run --release          # 默认 Mode::Idle（基线）
 ```
 
@@ -288,7 +314,7 @@ ZayGO/
 │   ├── ARCHITECTURE.md    四平面架构、场景模板、设备 API、双显示后端
 │   ├── HARDWARE-NOTES.md  板子实测身份、引脚分配、USB Host 供电、电容选型
 │   └── EXPERIMENT-01.md   实验设计 + 实测结果与判读
-└── exp01/
+└── exp/
     ├── src/
     │   ├── context.rs     naked 上下文切换（9 条汇编）
     │   ├── sched.rs       双优先级调度器 + SysTick 释放
@@ -310,7 +336,7 @@ ZayGO/
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | 四平面、双显示后端、场景模板、Plan 9 式设备 API |
 | [`docs/HARDWARE-NOTES.md`](docs/HARDWARE-NOTES.md) | 板子实测身份、引脚分配、USB Host 供电电路、电容选型 |
 | [`docs/EXPERIMENT-01.md`](docs/EXPERIMENT-01.md) | 实验设计、实测结果、判读与实验局限 |
-| [`exp01/README.md`](exp01/README.md) | 实验 01 的实现细节、**四个上板踩过的坑**、排查清单 |
+| [`exp/README.md`](exp/README.md) | 实验 01 的实现细节、**四个上板踩过的坑**、排查清单 |
 
 ---
 

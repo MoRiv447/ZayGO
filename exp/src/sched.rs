@@ -38,6 +38,27 @@ static mut CUR: usize = NO_TASK;
 
 static RT_RELEASED: AtomicBool = AtomicBool::new(false);
 static RELEASE_TS: AtomicU32 = AtomicU32::new(0);
+
+/// 第一个 tick 落在 CYCCNT 周期的哪个位置。
+///
+/// 为什么要这个：`time::init()` 先清零 CYCCNT，之后才使能 SysTick，
+/// 两者之间隔着几百个周期。所以 tick 边界在 CYCCNT 上**不对齐于 0**，
+/// 而是对齐于某个固定偏移（实测约 600 周期）。
+///
+/// 后果：任何"等到周期末尾再动手"的逻辑，如果按 0 对齐就会整体偏掉这个偏移，
+/// 导致小屏蔽时长完全盖不住释放点 —— 第一次跑就是这么错的。
+static ORIGIN: AtomicU32 = AtomicU32::new(0);
+static ORIGIN_SET: AtomicBool = AtomicBool::new(false);
+
+/// 下一次 tick 的**期望**时刻（由上上次累加一个周期得到）。
+static EXPECTED: AtomicU32 = AtomicU32::new(0);
+
+/// 被硬件静默合并掉的 tick 数。
+///
+/// 为什么要单独统计：屏蔽超过一个周期时，SysTick 的 pending 位只会被置起一次，
+/// 中间那些 tick 根本不会产生 ISR 入口。所以 `OVERRUN`（"上一轮还没跑完"）
+/// 恒为 0 —— 它检测不到这种情况。必须拿实际时刻和期望时刻比。
+pub static TICK_MISSED: AtomicU32 = AtomicU32::new(0);
 pub static OVERRUN: AtomicU32 = AtomicU32::new(0);
 
 pub fn init() {
@@ -161,7 +182,35 @@ fn on_tick() {
         OVERRUN.fetch_add(1, Ordering::Relaxed);
         return;
     }
-    RELEASE_TS.store(time::now(), Ordering::Relaxed);
+    let t = time::now();
+    // 只在第一个 tick 记一次：之后 tick 都落在同一相位上
+    if !ORIGIN_SET.swap(true, Ordering::Relaxed) {
+        ORIGIN.store(t % time::CYCLES_PER_MS, Ordering::Relaxed);
+        EXPECTED.store(t, Ordering::Relaxed);
+    } else {
+        let exp = EXPECTED
+            .load(Ordering::Relaxed)
+            .wrapping_add(time::CYCLES_PER_MS);
+        let late = t.wrapping_sub(exp);
+        // 守卫：`t < exp` 时 wrapping_sub 会把差变成约 2^32 的天文数字，
+        // 除掉周期正好得到 67173 这种"看似合理"的假值。必须挡掉。
+        // 上限取 4 个周期，足够覆盖最长的屏蔽档位（96000 = 1.5 周期）。
+        let n = if late < time::CYCLES_PER_MS * 4 {
+            late / time::CYCLES_PER_MS
+        } else {
+            0
+        };
+        if n > 0 {
+            TICK_MISSED.fetch_add(n, Ordering::Relaxed);
+            // **必须重新对齐**：早期版本漏了这一步，漂移会被后续每个 tick 反复累加，
+            // 一个 128 样本的档位报出 4200 这种量级的假数字。
+            // 对齐之后，每次只统计"这一拍到底吞了几个整周期"。
+            EXPECTED.store(exp.wrapping_add(n * time::CYCLES_PER_MS), Ordering::Relaxed);
+        } else {
+            EXPECTED.store(exp, Ordering::Relaxed);
+        }
+    }
+    RELEASE_TS.store(t, Ordering::Relaxed);
     RT_RELEASED.store(true, Ordering::Relaxed);
     yield_now();
 }
@@ -169,6 +218,11 @@ fn on_tick() {
 /// 释放时刻（周期计数器值）。RT 任务用它算调度延迟。
 pub fn release_ts() -> u32 {
     RELEASE_TS.load(Ordering::Relaxed)
+}
+
+/// tick 相位原点。所有"相对理想释放点"的计算都必须减掉它。
+pub fn origin() -> u32 {
+    ORIGIN.load(Ordering::Relaxed)
 }
 
 pub fn clear_release() {
@@ -198,13 +252,18 @@ extern "C" fn rt_task() -> ! {
         // 首次调度可能尚未经过一次释放，此时 t_release 为 0，相减是垃圾值。
         // 直接跳过，避免污染统计。
         if t_release != 0 {
-            measure::record(t_start.wrapping_sub(t_release), t_start);
+            measure::record(t_start, t_release);
         }
         load::rt_work();
         clear_release();
 
-        if measure::is_full() {
-            measure::dump_and_halt();
+        if load::is_sweep() {
+            // 屏蔽扫描：每档采满就换下一档，最后一档采完输出
+            if measure::is_stage_full() && !load::advance_stage() {
+                measure::dump_sweep();
+            }
+        } else if measure::len() >= measure::CAP {
+            measure::dump_single();
         }
     }
 }
