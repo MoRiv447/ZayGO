@@ -43,7 +43,7 @@ const PLL_STAGE: clock::Stage = clock::Stage::Full;
 ///
 /// 先用 `M200` 把"切换机制本身是否正确"这一层验证掉，再上 `M550`。
 /// 直接冲 550 会把板子搞死，而且分不清是代码写错还是 550 特有约束。
-const PLL_TARGET: clock::Target = clock::Target::M200;
+const PLL_TARGET: clock::Target = clock::Target::M400;
 
 /// L1 缓存配置。实验 01/02 用 `Off`，实验 03 用 `I` 与 `ID` 做两档对照。
 ///

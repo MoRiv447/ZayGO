@@ -46,6 +46,7 @@ const RCC_PLLCFGR: usize = RCC_BASE + 0x2C;
 const RCC_PLL1DIVR: usize = RCC_BASE + 0x30;
 
 const PWR_CR3: usize = PWR_BASE + 0x0C;
+const PWR_CSR1: usize = PWR_BASE + 0x04;
 const PWR_D3CR: usize = PWR_BASE + 0x18;
 
 // ---- RCC_CR ----
@@ -58,8 +59,28 @@ const CR_PLL1RDY: u32 = 1 << 25;
 const CR3_LDOEN: u32 = 1 << 1;
 const CR3_BYPASS: u32 = 1 << 0;
 const D3CR_VOS_MASK: u32 = 0b11 << 14;
-const D3CR_VOS_SCALE0: u32 = 0b11 << 14;
 const D3CR_VOSRDY: u32 = 1 << 13;
+
+/// VOS 档位编码。**这里是本文件最容易搞错的一处。**
+///
+/// `stm32h7xx_hal_pwr_ex.h` 里 `PWR_REGULATOR_VOLTAGE_SCALE0` 有**两套定义**，
+/// 取决于芯片用 D3CR 还是 SRDCR 管电压：
+///
+/// ```c
+/// // SRDCR 系列（部分 H7A/H7B）
+/// SCALE0 = 0b11   SCALE1 = 0b10   SCALE2 = 0b01   SCALE3 = 0b00
+/// // D3CR 系列（H723 属于这类）
+/// SCALE0 = 0b00   SCALE1 = 0b11   SCALE2 = 0b10   SCALE3 = 0b01
+/// ```
+///
+/// 早先按第一套写 `0b11`，以为是最高的 SCALE0，实际写成了 **SCALE1**。
+/// 后果：200MHz 能跑（复位默认 SCALE3 的上限就在这附近），
+/// 400/550 全部在切 SYSCLK 时挂死 —— 因为电压等级根本不够。
+///
+/// 实测读数：复位 `D3CR=0x6000`（SCALE3）；写 `0xE000` 得到 SCALE1；
+/// 写 `0x0000` 才是真正的 **SCALE0**（`D3CR=CSR1=0x2000`，VOS=0b00）。
+const VOS_SCALE0: u32 = 0b00 << 14;
+const VOS_SCALE1: u32 = 0b11 << 14;
 
 // ---- Flash ----
 const ACR_LATENCY_MASK: u32 = 0xF << 0;
@@ -101,6 +122,11 @@ pub enum Target {
     /// 与 `M400` 的唯一差别就是那一行 VOS0 写入。
     /// 通过 ⇒ VOS0 是罪魁；失败 ⇒ 问题在"频率超过 200"本身。
     M400NoVos,
+    /// 200MHz CPU，但 **AXI 不分频**（AXI = 200MHz）。
+    ///
+    /// 与 `M200` 的唯一差别是 HPRE。用来把"AXI/flash 时钟"从"CPU 时钟"
+    /// 里单独拎出来 —— 不用动链接脚本就能判断取指路径是否可疑。
+    M200Axi200,
     /// 550MHz：VOS0 + 3 等待周期 + AXI 分频到 275MHz。
     M550,
 }
@@ -163,7 +189,9 @@ pub fn init(target: Target, stage: Stage) -> Result<u32, &'static str> {
         // 550MHz：25/10*220/1。VOS0 必须；AXI 275MHz 要 3 WS
         // 400MHz：25/10*160/1。AXI 200MHz 要 2 WS
         Target::M400 => (160u32, true, 2u32, 1u32, 1u32, 400_000_000u32),
+        // 注：400MHz 在 SCALE1 的范围内，550 才需要 SCALE0
         Target::M400NoVos => (160u32, false, 2u32, 1u32, 1u32, 400_000_000u32),
+        Target::M200Axi200 => (80u32, false, 2u32, 1u32, 0u32, 200_000_000u32),
         Target::M550 => (220u32, true, 3u32, 2u32, 1u32, 550_000_000u32),
     };
 
@@ -178,11 +206,19 @@ pub fn init(target: Target, stage: Stage) -> Result<u32, &'static str> {
     crate::measure::mark(1, 0xC0DE_0002);
     if vos0 {
         rprintln!("# clk[2] PWR_D3CR={:#010x}", rd(PWR_D3CR));
-        modify(PWR_D3CR, D3CR_VOS_MASK, D3CR_VOS_SCALE0);
+        // 一律用 SCALE0（编码 0b00）。它是最高档，对任何目标频率都安全；
+        // 而 SCALE1 在 H72x/73x 上的上限可能只有 275MHz，用它跑 400 会失败。
+        modify(PWR_D3CR, D3CR_VOS_MASK, VOS_SCALE0);
         if !wait_set(PWR_D3CR, D3CR_VOSRDY, true) {
             return Err("VOS0 未就绪");
         }
-        rprintln!("# clk[2] VOS0 ready, PWR_D3CR={:#010x}", rd(PWR_D3CR));
+        // CSR1 的 ACTVOS[15:14] 才是"当前实际生效的电压等级"，
+        // D3CR 的 VOSRDY 只说明写入被接受。两者都要看。
+        rprintln!(
+            "# clk[2] VOS written, D3CR={:#010x} CSR1={:#010x} (ACTVOS bits 15:14)",
+            rd(PWR_D3CR),
+            rd(PWR_CSR1)
+        );
     } else {
         rprintln!("# clk[2] VOS left at reset default");
     }

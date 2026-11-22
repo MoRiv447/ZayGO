@@ -292,7 +292,7 @@ repository.
 | Only one board | Interrupt and multi-core testing are limited | All experiments are single-core friendly | known |
 | STM32H7 D-Cache vs DMA coherency | Screen corruption, random crashes | Mark the framebuffer Non-Cacheable; put DMA buffers in AXI SRAM, never DTCM | recorded in the hardware notes |
 | WFI conflicts with the debug port | Cannot debug a sleeping system | Root cause of the failed `DBG_SLEEP` workaround still unknown | **unresolved** |
-| Above 200 MHz the SYSCLK switch hangs the chip | 550 MHz unmeasurable; limit is between 200 and 400 MHz | 200 MHz verified working (full sweep + store/reset round-trip). VOS0 and cache order ruled out by single-variable tests. Suspect: instruction fetch at higher AXI clock — unverified | **blocked at 200 MHz**, cause narrowed |
+| Above 200 MHz the SYSCLK switch hangs the chip | 550 MHz unmeasurable | 200 MHz verified working end-to-end. VOS encoding bug found and fixed (SCALE0 is `0b00` on D3CR parts); AXI clock, cache order and D3 prescaler all ruled out by single-variable tests. Remaining difference from the vendor example is an unidentified register write | **blocked at 200 MHz** |
 
 ---
 

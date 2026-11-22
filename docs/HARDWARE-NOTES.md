@@ -560,39 +560,61 @@ probe-rs read  --chip STM32H723ZGTx b32 0x24003488 8        # read the markers
 24003488: 00000000 c0de0006 c0de0007 00000000 ...
 ```
 
-### The frequency boundary is between 200 and 400 MHz
+### The VOS encoding bug (found and fixed)
 
-Four targets were tried, one variable at a time. Every one of them dies at the **SYSCLK switch**
-(marker `0xC0DE0008` never appears) unless the target is 200 MHz:
+For a long time the failures were blamed on "VOS0 not taking effect". That was half right.
 
-| Target | VOS | AXI | Flash WS | Result |
-|---|---|---|---|---|
-| HSI 64 MHz | reset default | 64 | 0 | ✅ baseline |
-| **200 MHz** | reset default | 100 | 2 | ✅ **works, full sweep collected** |
-| 400 MHz | **VOS0** | 200 | 2 | ❌ dies at the switch |
-| 400 MHz | reset default | 200 | 2 | ❌ dies at the switch |
-| 550 MHz | **VOS0** | 275 | 3 | ❌ dies at the switch |
+`stm32h7xx_hal_pwr_ex.h` defines `PWR_REGULATOR_VOLTAGE_SCALE0` **twice**, under different
+conditions, because some H7 parts put voltage scaling in `SRDCR` and others in `D3CR`:
 
-The two 400 MHz rows are the decisive pair: the **only** difference between them is the VOS0
-write, and both fail. So **VOS0 is not the cause** — the earlier suspicion was wrong.
+```c
+// SRDCR parts        SCALE0 = 0b11   SCALE1 = 0b10   SCALE2 = 0b01   SCALE3 = 0b00
+// D3CR parts (H723)  SCALE0 = 0b00   SCALE1 = 0b11   SCALE2 = 0b10   SCALE3 = 0b01
+```
 
-What is ruled out by measurement:
+The code was written against the first table, so writing `0b11` produced **SCALE1**, not the
+highest level. Reset is `0b01` = **SCALE3**, whose ceiling is around 200 MHz — which is exactly
+where the working configuration sat.
 
-- PLL parameters — the readback `DIVR` matches the intended N/P/Q/R in every case
-- HSE start-up, PLL lock, flash wait states, bus dividers — all confirmed by markers 3–7
-- VOS0 — a target with and without it fails identically
-- cache ordering — the vendor's order (caches before clock) was tried, same result
-- D3 prescaler — 200 MHz sets the same D3PPRE and survives
+Verified from the host, with no firmware involved:
 
-### What is still suspect
+| Write to `PWR_D3CR` | `PWR_D3CR` reads | `PWR_CSR1` (ACTVOS) |
+|---|---|---|
+| reset | `0x6000` → SCALE3 | `0x6000` |
+| `0xE000` | `0xE000` → SCALE1 | `0xE000` |
+| **`0x0000`** | **`0x2000` → SCALE0** | **`0x2000`** |
 
-Something that changes between 200 MHz SYSCLK and 400 MHz SYSCLK while AXI goes 100 → 200 MHz.
-The most likely candidate is the instruction-fetch path: the code runs from flash, and a wrong
-latency there would produce a fault whose handler also lives in flash — nothing runs, no output,
-exactly what is observed.
+`PWR_CSR1.ACTVOS[15:14]` is the field that matters — it reports the level actually in force.
+`PWR_D3CR.VOSRDY` only says the write was accepted. And `ACTVOSRDY` is `PWR_CSR1` bit 13, **not**
+`PWR_CR3` bit 13 (H723 has no such bit in CR3).
 
-But this is **not yet verified**. Confirming it needs either a run from RAM (ITCM) or a logic
-analyser on the flash interface, and neither was done.
+### The switch still fails above 200 MHz
+
+Even with SCALE0 confirmed active, 400 MHz and 550 MHz still die at the SYSCLK switch
+(marker `0xC0DE0008` never appears). What has been ruled out by single-variable measurement:
+
+| Suspect | How it was excluded |
+|---|---|
+| PLL parameters | `DIVR` readback matches the intended N/P/Q/R at every target |
+| HSE, PLL lock, flash WS, dividers | markers 3–7 all appear before the failure |
+| VOS level | SCALE0 confirmed via `ACTVOS`; 400 with SCALE1 and with SCALE0 both fail |
+| **AXI / flash clock** | **200 MHz CPU with AXI at 200 MHz works** — same AXI as the failing 400 MHz case |
+| Cache ordering | vendor order (caches before clock) tried, no change |
+| D3 prescaler | 200 MHz sets the same `D3PPRE` and survives |
+
+The AXI result is the important one: it **refutes** the earlier "instruction fetch is the problem"
+hypothesis, which is why the planned ITCM experiment was not carried out. Moving code to ITCM
+would have been wasted effort against a refuted theory.
+
+### What is still unknown
+
+The failure depends on CPU clock above 200 MHz, with AXI, VOS, cache and PLL all eliminated,
+and the vendor's own example presumably running at 550 MHz on the same board. That means the
+difference is in a part of the clock-setup sequence that has not been found yet — most likely a
+register write the vendor's HAL performs and this hand-rolled sequence does not.
+
+Further blind iteration costs one flash-erase cycle per attempt and leaves the board unusable
+until recovered, so the work is parked at a verified 200 MHz.
 
 ### Recovery
 
@@ -621,10 +643,3 @@ data over RTT. Two properties were confirmed the hard way:
 
 What is missing is a clock configuration that survives long enough to store anything.
 
-### Suspected cause
-
-DBGMCU lives in the **D3 domain**, and the switch changes both the core supply domain (VOS0) and
-the D3/AXI clock. Either could be the trigger; it was not isolated, because each attempt costs
-another erase cycle and the board has to be assumed dead until proven otherwise.
-
----
