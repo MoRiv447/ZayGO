@@ -10,6 +10,7 @@
 #![allow(static_mut_refs)]
 
 mod context;
+mod crit;
 mod load;
 mod measure;
 mod sched;

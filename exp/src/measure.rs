@@ -23,6 +23,7 @@
 
 use rtt_target::rprintln;
 
+use crate::crit;
 use crate::load;
 use crate::sched;
 use crate::time;
@@ -44,7 +45,10 @@ static mut PREV_START: u32 = 0;
 static mut HAS_PREV: bool = false;
 
 pub fn record(t_start: u32, t_release: u32) {
-    unsafe {
+    // 写入三条数组 + 推进索引是一个真实的临界区：中断若在写到一半时进来，
+    // 读到的就是半成品。用带预算申报的包装，顺便让 sample_ring_push 站点
+    // 有真实负载 —— 声明了却从不执行的站点，运行期最大值恒为 0，等于没验证。
+    crit::mask(crit::SITE_SAMPLE_RING_PUSH, || unsafe {
         if N >= CAP {
             return;
         }
@@ -65,7 +69,7 @@ pub fn record(t_start: u32, t_release: u32) {
         HAS_PREV = true;
         PREV_START = t_start;
         N += 1;
-    }
+    });
 }
 
 pub fn len() -> usize {
@@ -112,8 +116,27 @@ pub fn dump_sweep() -> ! {
         sched::OVERRUN.load(core::sync::atomic::Ordering::Relaxed),
         sched::TICK_MISSED.load(core::sync::atomic::Ordering::Relaxed)
     );
+    dump_mask_budget();
     rprintln!("# END");
     halt()
+}
+
+/// 中断屏蔽预算的运行期实测报告。
+///
+/// 和构建期报告对照着看：构建期检查的是**申报值**，这里检查的是**实测值**。
+/// 两者都通过，才能说"这一版代码的屏蔽时长在预算内"——但仍然不是 WCET 证明。
+pub fn dump_mask_budget() {
+    rprintln!("# mask budget: declared_max={} cycles", crit::MAX_MASK_CYCLES);
+    rprintln!("# site,budget,observed_max,violations");
+    for i in 0..crit::site_count() {
+        rprintln!(
+            "# {},{},{},{}",
+            crit::SITE_NAMES[i],
+            crit::SITE_BUDGETS[i],
+            crit::SITE_MAX[i].load(core::sync::atomic::Ordering::Relaxed),
+            crit::SITE_VIOLATIONS[i].load(core::sync::atomic::Ordering::Relaxed)
+        );
+    }
 }
 
 /// 实验 01：单档分布输出。

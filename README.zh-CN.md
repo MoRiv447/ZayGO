@@ -313,7 +313,9 @@ ZayGO/
 │   ├── POSITIONING.md     定位论证：三项目取证 + 共同缺口 + 路线对比
 │   ├── ARCHITECTURE.md    四平面架构、场景模板、设备 API、双显示后端
 │   ├── HARDWARE-NOTES.md  板子实测身份、引脚分配、USB Host 供电、电容选型
-│   └── EXPERIMENT-01.md   实验设计 + 实测结果与判读
+│   ├── EXPERIMENT-01.md   实验 01：设计 + 实测结果
+│   ├── EXPERIMENT-02.md   实验 02：屏蔽中断敏感度
+│   └── MASK-BUDGET.md     构建期中段屏蔽预算
 └── exp/
     ├── src/
     │   ├── context.rs     naked 上下文切换（9 条汇编）
@@ -335,7 +337,9 @@ ZayGO/
 | [`docs/POSITIONING.md`](docs/POSITIONING.md) | 三个参照项目的取证、共同缺口、候选路线与取舍 |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | 四平面、双显示后端、场景模板、Plan 9 式设备 API |
 | [`docs/HARDWARE-NOTES.md`](docs/HARDWARE-NOTES.md) | 板子实测身份、引脚分配、USB Host 供电电路、电容选型 |
-| [`docs/EXPERIMENT-01.md`](docs/EXPERIMENT-01.md) | 实验设计、实测结果、判读与实验局限 |
+| [`docs/EXPERIMENT-01.md`](docs/EXPERIMENT-01.md) | 实验 01：设计、实测结果、判读与局限 |
+| [`docs/EXPERIMENT-02.md`](docs/EXPERIMENT-02.md) | 实验 02：屏蔽中断的敏感度、实测结果 |
+| [`docs/MASK-BUDGET.md`](docs/MASK-BUDGET.md) | **构建期中断屏蔽预算**：清单、硬失败、运行期监视 |
 | [`exp/README.md`](exp/README.md) | 实验 01 的实现细节、**四个上板踩过的坑**、排查清单 |
 
 ---

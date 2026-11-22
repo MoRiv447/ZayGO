@@ -354,7 +354,9 @@ ZayGO/
 │   ├── POSITIONING.md     positioning: evidence from three projects, gaps, options
 │   ├── ARCHITECTURE.md    four planes, scenario templates, device API, display backends
 │   ├── HARDWARE-NOTES.md  board identity, pin assignment, USB Host power, capacitor selection
-│   └── EXPERIMENT-01.md   experiment design, measured results, interpretation
+│   ├── EXPERIMENT-01.md   experiment 01: design + measured results
+│   ├── EXPERIMENT-02.md   experiment 02: interrupt-masking sensitivity
+│   └── MASK-BUDGET.md     build-time interrupt-masking budget
 └── exp/
     ├── src/
     │   ├── context.rs     naked context switch (9 instructions)
@@ -376,7 +378,9 @@ ZayGO/
 | [`docs/POSITIONING.md`](docs/POSITIONING.md) | Evidence from the three reference projects, the shared gaps, candidate routes and trade-offs |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Four planes, dual display backends, scenario templates, Plan 9-style device API |
 | [`docs/HARDWARE-NOTES.md`](docs/HARDWARE-NOTES.md) | Board identity, pin assignment, USB Host power circuit, capacitor selection |
-| [`docs/EXPERIMENT-01.md`](docs/EXPERIMENT-01.md) | Experiment design, measured results, interpretation and limitations |
+| [`docs/EXPERIMENT-01.md`](docs/EXPERIMENT-01.md) | Experiment 01: design, measured results, interpretation, limitations |
+| [`docs/EXPERIMENT-02.md`](docs/EXPERIMENT-02.md) | Experiment 02: interrupt-masking sensitivity, measured results |
+| [`docs/MASK-BUDGET.md`](docs/MASK-BUDGET.md) | **Build-time interrupt-masking budget**: manifest, hard build failure, runtime monitor |
 | [`exp/README.md`](exp/README.md) | Implementation details, **four hardware pitfalls hit**, troubleshooting checklist |
 
 ---

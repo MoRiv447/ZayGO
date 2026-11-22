@@ -324,9 +324,10 @@ makes it far more tractable than runtime admission control.
 
 So the order changes:
 
-1. **Interrupt-masking budget as a build-time check** — measure or annotate the longest critical
-   section, emit it in the report, fail the build when it exceeds the period. This is the first
-   real deliverable of the "predictability" column.
+1. ✅ **Interrupt-masking budget as a build-time check** — done 2026-11-22. A manifest declares
+each critical section's budget; the build fails when a declaration exceeds the allowance; a
+runtime monitor compares measured against declared. See [`docs/MASK-BUDGET.md`](docs/MASK-BUDGET.md).
+   It caught two of my own mis-declarations within the hour.
 2. **Experiment 03: re-run with cache enabled** — cache is off after reset, real products enable
    it, and it changes the WCET characteristics of both dispatch and critical sections.
 3. **Configure the PLL to 550 MHz and re-run both experiments** — the current absolute numbers

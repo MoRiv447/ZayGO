@@ -7,6 +7,7 @@
 
 use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
+use crate::crit;
 use crate::sched;
 use crate::time;
 
@@ -153,7 +154,7 @@ fn mask_round() {
 
         // 2) 关中断。在中断已关的状态下等相位回绕，再多屏蔽 M 个周期。
         //    注意：等回绕的这段也在屏蔽，所以相位一旦回绕就说明释放点已被挡住。
-        cortex_m::interrupt::free(|_| {
+        crit::mask(crit::SITE_SWEEP_MASK_STIMULUS, || {
             let p0 = time::now().wrapping_sub(origin) % period;
             loop {
                 let p = time::now().wrapping_sub(origin) % period;
@@ -168,7 +169,7 @@ fn mask_round() {
         });
     } else {
         // 超过一个周期：直接整段屏蔽，让 tick 被丢掉 —— 专门用来暴露这个现象
-        cortex_m::interrupt::free(|_| {
+        crit::mask(crit::SITE_SWEEP_MASK_STIMULUS, || {
             let t = time::now();
             while time::elapsed(t) < m {
                 core::hint::spin_loop();

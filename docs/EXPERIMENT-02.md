@@ -116,33 +116,38 @@ ISR per round → ~0.5 tick lost per round).
 ## 5. Results
 
 Platform: STM32H723ZGT6 (Cortex-M7 r1p2), **64 MHz HSI, no PLL, cache off**, 1 ms period.
-128 samples per stage, `overruns = 0`, `tick_missed = 64` (all from the last stage).
+128 samples per stage, `overruns = 0`, `tick_missed = 61` (all from the last stage).
+
+> These numbers come from the run that includes the interrupt-masking budget monitor
+> (`src/crit.rs`). Instrumenting the sample write costs about **16 extra cycles** of dispatch
+> latency — the pre-instrumentation run measured 267 instead of 283, and a 389 instead of 399
+> baseline. The 1:1 slope is unchanged. That is the honest price of the guarantee.
 
 Units are cycles; 1 cycle = 15.6 ns.
 
 | mask (cyc) | n | `phase` min | p50 | p99 | max | `dispatch` p50 | Δ p50 vs M=0 | Δ/mask |
 |---|---|---|---|---|---|---|---|---|
-| 0 | 128 | 384 | **389** | 445 | 483 | **267** | 0 | — |
-| 500 | 128 | 886 | **891** | 912 | 912 | **267** | 502 | **100.4 %** |
-| 1000 | 128 | 1390 | **1395** | 1416 | 1416 | **267** | 1006 | **100.6 %** |
-| 2000 | 128 | 2371 | **2377** | 2381 | 2381 | **267** | 1988 | **99.4 %** |
-| 4000 | 128 | 4385 | **4391** | 4395 | 4395 | **267** | 4002 | **100.1 %** |
-| 8000 | 128 | 8391 | **8397** | 8399 | 8411 | **267** | 8008 | **100.1 %** |
-| 16000 | 128 | 16371 | **16375** | 16392 | 16392 | **267** | 15986 | **99.9 %** |
-| 96000 | 128 | 297 | **32265** | 63457 | 63709 | 281 | — | — |
+| 0 | 128 | 394 | **399** | 448 | 503 | **283** | 0 | — |
+| 500 | 128 | 898 | **918** | 924 | 924 | **283** | 519 | **103.8 %** |
+| 1000 | 128 | 1387 | **1407** | 1414 | 1414 | **283** | 1008 | **100.8 %** |
+| 2000 | 128 | 2386 | **2400** | 2413 | 2413 | **283** | 2001 | **100.0 %** |
+| 4000 | 128 | 4413 | **4419** | 4424 | 4429 | **283** | 4020 | **100.5 %** |
+| 8000 | 128 | 8404 | **8419** | 8431 | 8431 | **283** | 8020 | **100.2 %** |
+| 16000 | 128 | 16396 | **16410** | 16421 | 16422 | **283** | 16011 | **100.1 %** |
+| 96000 | 128 | 255 | **33047** | 63514 | 63728 | 294 | — | — |
 
 As time (@64 MHz):
 
 | mask | p50 | max |
 |---|---|---|
-| 0 | 6.1 µs | 7.5 µs |
-| 500 | 13.9 µs | 14.2 µs |
-| 1000 | 21.8 µs | 22.1 µs |
-| 2000 | 37.1 µs | 37.2 µs |
-| 4000 | 68.6 µs | 68.7 µs |
-| 8000 | 131.2 µs | 131.4 µs |
-| 16000 | 255.9 µs | 256.1 µs |
-| 96000 | 504.1 µs | 995.5 µs |
+| 0 | 6.2 µs | 7.9 µs |
+| 500 | 14.0 µs | 14.4 µs |
+| 1000 | 21.7 µs | 22.1 µs |
+| 2000 | 37.3 µs | 37.7 µs |
+| 4000 | 69.0 µs | 69.2 µs |
+| 8000 | 131.3 µs | 131.7 µs |
+| 16000 | 256.2 µs | 256.6 µs |
+| 96000 | 516.4 µs | 995.8 µs |
 
 (The last row's p50 ≈ half a period and max ≈ a full period — that is the phase-lock collapse
 described in 6.3, not a delay value to be read literally.)
