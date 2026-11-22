@@ -547,30 +547,52 @@ So HSE 25 MHz / M=10 / N=220 / P=1 = 550 MHz is a valid configuration and the ch
 ### Where it dies — localised without a debug link
 
 The debug link dies during this sequence, so "print and look" stops working. Instead the firmware
-writes a **progress marker into `.uninit`** at each step. `.uninit` is uninitialised RAM that
+writes a **progress marker into `.uninit`** at every step. `.uninit` is uninitialised RAM that
 cortex-m-rt does not clear, and it survives a flash erase, so the markers can be read back with no
 live connection at all:
 
 ```bash
-probe-rs erase --chip STM32H723ZGTx --connect-under-reset   # 恢复 AP
-probe-rs read  --chip STM32H723ZGTx b32 0x24003488 8       # 读标记
+probe-rs erase --chip STM32H723ZGTx --connect-under-reset   # recover the AP
+probe-rs read  --chip STM32H723ZGTx b32 0x24003488 8        # read the markers
 ```
 
 ```
-24003488: 00000000 c0de0006 c0de0007 00000001 00000036 00017728 ...
+24003488: 00000000 c0de0006 c0de0007 00000000 ...
 ```
 
-| Marker present | Meaning |
-|---|---|
-| `0xC0DE0006` | flash wait states programmed |
-| `0xC0DE0007` | bus dividers programmed |
-| `0xC0DE0008` | **absent — the SYSCLK switch never completed** |
+### The frequency boundary is between 200 and 400 MHz
 
-So VOS0, HSE start-up, PLL lock, flash latency and bus dividers all succeed. The failure is the
-switch itself, or the first instruction executed at the new frequency.
+Four targets were tried, one variable at a time. Every one of them dies at the **SYSCLK switch**
+(marker `0xC0DE0008` never appears) unless the target is 200 MHz:
 
-No `MAGIC` word was found anywhere in the block, which confirms the firmware never reached
-`store()` — the store-and-reset workaround never got a chance to run.
+| Target | VOS | AXI | Flash WS | Result |
+|---|---|---|---|---|
+| HSI 64 MHz | reset default | 64 | 0 | ✅ baseline |
+| **200 MHz** | reset default | 100 | 2 | ✅ **works, full sweep collected** |
+| 400 MHz | **VOS0** | 200 | 2 | ❌ dies at the switch |
+| 400 MHz | reset default | 200 | 2 | ❌ dies at the switch |
+| 550 MHz | **VOS0** | 275 | 3 | ❌ dies at the switch |
+
+The two 400 MHz rows are the decisive pair: the **only** difference between them is the VOS0
+write, and both fail. So **VOS0 is not the cause** — the earlier suspicion was wrong.
+
+What is ruled out by measurement:
+
+- PLL parameters — the readback `DIVR` matches the intended N/P/Q/R in every case
+- HSE start-up, PLL lock, flash wait states, bus dividers — all confirmed by markers 3–7
+- VOS0 — a target with and without it fails identically
+- cache ordering — the vendor's order (caches before clock) was tried, same result
+- D3 prescaler — 200 MHz sets the same D3PPRE and survives
+
+### What is still suspect
+
+Something that changes between 200 MHz SYSCLK and 400 MHz SYSCLK while AXI goes 100 → 200 MHz.
+The most likely candidate is the instruction-fetch path: the code runs from flash, and a wrong
+latency there would produce a fault whose handler also lives in flash — nothing runs, no output,
+exactly what is observed.
+
+But this is **not yet verified**. Confirming it needs either a run from RAM (ITCM) or a logic
+analyser on the flash interface, and neither was done.
 
 ### Recovery
 

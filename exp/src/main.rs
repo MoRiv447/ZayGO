@@ -39,6 +39,12 @@ const USE_PLL: bool = false;
 /// 诊断阶段。先用 `Lock` 确认 PLL 参数本身没问题，再改 `Full`。
 const PLL_STAGE: clock::Stage = clock::Stage::Full;
 
+/// 目标频率。
+///
+/// 先用 `M200` 把"切换机制本身是否正确"这一层验证掉，再上 `M550`。
+/// 直接冲 550 会把板子搞死，而且分不清是代码写错还是 550 特有约束。
+const PLL_TARGET: clock::Target = clock::Target::M200;
+
 /// L1 缓存配置。实验 01/02 用 `Off`，实验 03 用 `I` 与 `ID` 做两档对照。
 ///
 /// 用常量而不是运行时开关：缓存必须在任何计时开始之前就确定状态，
@@ -101,17 +107,9 @@ fn main() -> ! {
 
     // 时钟必须在 time::init 之前定下来：CYCCNT 清零的时刻要与最终频率一致，
     // 否则所有周期数与时间的换算都会偏。
-    if USE_PLL {
-        match clock::init(PLL_STAGE) {
-            Ok(hz) => rprintln!("# clock: PLL OK, CPU {} Hz", hz),
-            Err(e) => rprintln!("# clock: PLL 配置失败（{}），继续跑 {} Hz", e, clock::cpu_hz()),
-        }
-    } else {
-        rprintln!("# clock: HSI (reset default) {} Hz", clock::cpu_hz());
-    }
-
-    time::init();
-
+    // 缓存必须在配时钟**之前**开。
+    // 这不是风格问题：板厂参考例程的顺序就是 SCB_EnableICache/DCache 先、
+    // SystemClock_Config 后。550MHz 下取指带宽吃紧，先开缓存再升频是它的前提。
     if CACHE_MODE != CacheMode::Off {
         cache::enable_icache();
     }
@@ -123,6 +121,17 @@ fn main() -> ! {
         cache::icache_enabled(),
         cache::dcache_enabled()
     );
+    if USE_PLL {
+        match clock::init(PLL_TARGET, PLL_STAGE) {
+            Ok(hz) => rprintln!("# clock: PLL OK, CPU {} Hz", hz),
+            Err(e) => rprintln!("# clock: PLL 配置失败（{}），继续跑 {} Hz", e, clock::cpu_hz()),
+        }
+    } else {
+        rprintln!("# clock: HSI (reset default) {} Hz", clock::cpu_hz());
+    }
+
+    time::init();
+
 
     // SysTick 必须在调度器初始化之后才能开：init 里设置的是中断优先级，
     // 顺序反了会让第一次 tick 落在一个尚未配置好 PendSV 优先级的系统上。

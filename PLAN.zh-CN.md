@@ -250,7 +250,7 @@ extensions:
 | 板子只有一块 | 测中断/双核受限 | 全部实验单核可做 | 已知 |
 | STM32H7 的 D-Cache 与 DMA 一致性 | 屏花屏、随机崩 | 帧缓冲标 Non-Cacheable；DMA 缓冲放 AXI 而非 DTCM | 已在硬件笔记记录 |
 | WFI 与调试口冲突 | 长时间休眠后无法调试 | 查明 DBG_SLEEP 未生效的原因 | **未解决** |
-| VOS0 / SYSCLK 切换打断 SWD 链路 | 550MHz 无法用实时 RTT 测量，且不确定复现 | 改走「RAM 缓冲 + SYSRESETREQ + 复位后读回」；恢复手段是 `probe-rs erase --connect-under-reset` | **受阻**，绕法已定 |
+| 超过 200MHz 时 SYSCLK 切换会挂死芯片 | 550MHz 测不了；阈值在 200~400MHz 之间 | 200MHz 已验证可用（完整扫描 + 存盘/复位往返）。VOS0 与缓存顺序已用单变量排除。怀疑是更高 AXI 时钟下的取指路径 —— 未验证 | **卡在 200MHz**，原因已收窄 |
 
 ---
 
