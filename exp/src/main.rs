@@ -37,7 +37,7 @@ const MODE: load::Mode = load::Mode::Mask;
 const USE_PLL: bool = false;
 
 /// 诊断阶段。先用 `Lock` 确认 PLL 参数本身没问题，再改 `Full`。
-const PLL_STAGE: clock::Stage = clock::Stage::Lock;
+const PLL_STAGE: clock::Stage = clock::Stage::Full;
 
 /// L1 缓存配置。实验 01/02 用 `Off`，实验 03 用 `I` 与 `ID` 做两档对照。
 ///
@@ -85,6 +85,14 @@ fn main() -> ! {
     rprintln!("# CPU {} Hz", time::cpu_hz());
     rprintln!("# 周期 1ms，样本上限 {}", measure::CAP);
     rprintln!("# 模式 {:?}", MODE as u8);
+    rprintln!("# uninit block at {:#010x}", measure::block_addr());
+
+    // 上一次运行若因高时钟无法用 RTT，它会把结果锁进 .uninit 并触发系统复位。
+    // 现在芯片回到 HSI，调试口可用，把那份数据打出来就完事了。
+    if measure::has_results() {
+        rprintln!("# 发现 .uninit 里存有上次结果，改为输出而不重新测量");
+        measure::dump_stored();
+    }
 
     // 必须在任何 WFI 之前完成，否则调试口先失联就再也改不了了
     unsafe {
@@ -121,6 +129,8 @@ fn main() -> ! {
     sched::init();
 
     load::set_mode(MODE);
+    // 真正要测了，先把上一轮可能残留的结果块清掉
+    measure::reset();
 
     let cp = cortex_m::Peripherals::take().unwrap();
     let mut syst = cp.SYST;

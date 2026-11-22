@@ -144,17 +144,20 @@ pub enum Stage {
 pub fn init(stage: Stage) -> Result<u32, &'static str> {
     use rtt_target::rprintln;
     // 1) 供电：确认 LDO 模式
+    crate::measure::mark(1, 0xC0DE_0001);
     rprintln!("# clk[1] PWR_CR3={:#010x}", rd(PWR_CR3));
     modify(PWR_CR3, CR3_LDOEN, CR3_LDOEN);
     rprintln!("# clk[1] PWR_CR3={:#010x} (LDOEN set)", rd(PWR_CR3));
     wait_set(PWR_CR3, CR3_ACTVOSRDY, true);
 
     // 2) 电压等级 VOS0 —— 550MHz 必须，先升压再升频
+    crate::measure::mark(1, 0xC0DE_0002);
     rprintln!("# clk[2] PWR_D3CR={:#010x}", rd(PWR_D3CR));
     modify(PWR_D3CR, D3CR_VOS_MASK, D3CR_VOS_SCALE0);
     if !wait_set(PWR_D3CR, D3CR_VOSRDY, true) {
         return Err("VOS0 未就绪");
     }
+    crate::measure::mark(1, 0xC0DE_0003);
     rprintln!("# clk[2] VOS0 ready, PWR_D3CR={:#010x}", rd(PWR_D3CR));
 
     // 3) 开 HSE 并等就绪
@@ -162,6 +165,7 @@ pub fn init(stage: Stage) -> Result<u32, &'static str> {
     if !wait_set(RCC_CR, CR_HSERDY, true) {
         return Err("HSE 未起振（晶振有问题？）");
     }
+    crate::measure::mark(1, 0xC0DE_0004);
     rprintln!("# clk[3] HSE ready, RCC_CR={:#010x}", rd(RCC_CR));
 
     // 4) 配 PLL1
@@ -182,6 +186,7 @@ pub fn init(stage: Stage) -> Result<u32, &'static str> {
     if !wait_set(RCC_CR, CR_PLL1RDY, true) {
         return Err("PLL1 未锁定（参数或供电）");
     }
+    crate::measure::mark(2, 0xC0DE_0005);
     rprintln!(
         "# clk[5] PLL locked: CR={:#010x} DIVR={:#010x} CFGR={:#010x}",
         rd(RCC_CR),
@@ -198,6 +203,7 @@ pub fn init(stage: Stage) -> Result<u32, &'static str> {
     modify(FLASH_ACR, ACR_LATENCY_MASK | ACR_WRHIGHFREQ_MASK, LATENCY_3WS | WRHIGHFREQ_2);
     dsb_isb();
 
+    crate::measure::mark(1, 0xC0DE_0006);
     rprintln!("# clk[6] FLASH_ACR={:#010x}", rd(FLASH_ACR));
 
     // 7) 设总线分频。H7 的分频字段是分级编码：0=/1, 1=/2, 2=/4 …
@@ -212,6 +218,7 @@ pub fn init(stage: Stage) -> Result<u32, &'static str> {
         rprintln!("# clk[7] D3PPRE left at /1 (diagnostic only, out of spec)");
     }
 
+    crate::measure::mark(2, 0xC0DE_0007);
     rprintln!(
         "# clk[7] dividers set: D1CFGR={:#010x} D2CFGR={:#010x} D3CFGR={:#010x}",
         rd(RCC_D1CFGR),
@@ -228,6 +235,7 @@ pub fn init(stage: Stage) -> Result<u32, &'static str> {
     }
     debug_assert_eq!(rd(RCC_CFGR) & CFGR_SWS_MASK, SWS_PLL1 << 3);
 
+    crate::measure::mark(3, 0xC0DE_0008);
     CPU_HZ.store(550_000_000, Ordering::Relaxed);
     Ok(550_000_000)
 }

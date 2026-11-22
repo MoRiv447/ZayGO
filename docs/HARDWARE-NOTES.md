@@ -504,83 +504,6 @@ STM32 LTDC manual (applies to H7 / N6):
 
 ---
 
-## 9. Switching to 550 MHz breaks the SWD link
-
-**Attempted 2026-11-22. PLL parameters verified correct; the switch itself is not debuggable.**
-
-### What was verified
-
-The PLL configuration copied from the vendor reference example is right. Readback after lock:
-
-```
-# clk[3] HSE ready, RCC_CR=0x00034025
-# clk[5] PLL locked: CR=0x03034025 DIVR=0x010100db
-```
-
-`DIVR=0x010100DB` decodes to `N1=219`, `P1=0`, `Q1=1`, `R1=1` — exactly "N/P/Q/R stored as value
-minus one", as implemented. `CR` has `HSEON|HSERDY|PLL1ON|PLL1RDY` all set.
-
-So HSE 25 MHz / M=10 / N=220 / P=1 = 550 MHz is a valid configuration and the chip locks it.
-
-### What fails
-
-Executing the **VOS0 voltage-scaling change plus the SYSCLK switch** kills the SWD access port:
-
-```
-Error: Failed to read register DRW ... Target device responded with a WAIT response
-```
-
-And it is **not deterministic**. The same firmware, run twice:
-
-| Run | Last line printed |
-|---|---|
-| 1 | `# clk[5] PLL locked …` (got through VOS0, HSE, PLL) |
-| 2 | `# clk[1] PWR_CR3=… (LDOEN set)` (died before the VOS0 transition) |
-
-Same code, different failure point ⇒ not a parameter error. Something about the power/clock
-domain transition is destabilising the debug logic.
-
-### Recovery
-
-`probe-rs reset --connect-under-reset` does **not** recover it — most likely because nRESET is not
-wired on this board (it was listed as "recommended, not required" in the probe wiring table).
-
-The only reliable recovery is to erase the flash while holding reset:
-
-```bash
-probe-rs erase --chip STM32H723ZGTx --connect-under-reset
-```
-
-Verified twice. After erasing, the CPU no longer runs the bad firmware and the AP is reachable
-again.
-
-### Suspected cause
-
-DBGMCU lives in the **D3 domain**, so both the VOS0 supply transition and a D3PPRE change can
-disturb the debug logic. Which of the two dominates was not isolated, because each attempt costs
-another erase cycle.
-
-### A workaround worth trying next
-
-Don't rely on live RTT at 550 MHz. Instead:
-
-1. run the measurement with caches/clocks configured, storing samples in RAM as usual;
-2. on completion, write a magic word + length, then trigger `SYSRESETREQ`;
-3. after reset the chip is back on HSI 64 MHz and the AP works;
-4. read the RAM buffer directly with `probe-rs read`.
-
-The cycle counts are still valid (they were measured at the high clock); only the *transport*
-changes. This is the same trick as using a RAM ring buffer, one layer down.
-
-### Consequence for the project
-
-The absolute timing numbers remain 64 MHz numbers. The **1:1 masking slope is unaffected** — it
-was shown to be structural across three cache configurations in
-[`EXPERIMENT-03.md`](EXPERIMENT-03.md), and frequency is the same class of microarchitectural
-parameter.
-
----
-
 ## 8. Sources
 
 | Conclusion | Source |
@@ -602,3 +525,84 @@ parameter.
 | N647 on-board 4.3" RGB LCD + GT911 | board vendor's official wiki, ATK-MD0430R module repository |
 | N6 Chrom-GRC / Neo-Chrom | STM32N647xx datasheet sections 3.12 / 3.30 |
 | PA11/PA12 taken by CAN | cgzjs/stm32h743-industrial-gateway BRINGUP.md |
+
+## 9. Switching to 550 MHz breaks the SWD link
+
+**Attempted 2026-11-22. The PLL parameters are verified correct; the switch itself is unreachable.**
+
+### What is verified
+
+The PLL configuration copied from the vendor reference example is right. Readback after lock:
+
+```
+# clk[3] HSE ready, RCC_CR=0x00034025
+# clk[5] PLL locked: CR=0x03034025 DIVR=0x010100db
+```
+
+`DIVR=0x010100DB` decodes to `N1=219`, `P1=0`, `Q1=1`, `R1=1` — exactly "N/P/Q/R stored as value
+minus one". `CR` has `HSEON|HSERDY|PLL1ON|PLL1RDY` all set.
+
+So HSE 25 MHz / M=10 / N=220 / P=1 = 550 MHz is a valid configuration and the chip locks it.
+
+### Where it dies — localised without a debug link
+
+The debug link dies during this sequence, so "print and look" stops working. Instead the firmware
+writes a **progress marker into `.uninit`** at each step. `.uninit` is uninitialised RAM that
+cortex-m-rt does not clear, and it survives a flash erase, so the markers can be read back with no
+live connection at all:
+
+```bash
+probe-rs erase --chip STM32H723ZGTx --connect-under-reset   # 恢复 AP
+probe-rs read  --chip STM32H723ZGTx b32 0x24003488 8       # 读标记
+```
+
+```
+24003488: 00000000 c0de0006 c0de0007 00000001 00000036 00017728 ...
+```
+
+| Marker present | Meaning |
+|---|---|
+| `0xC0DE0006` | flash wait states programmed |
+| `0xC0DE0007` | bus dividers programmed |
+| `0xC0DE0008` | **absent — the SYSCLK switch never completed** |
+
+So VOS0, HSE start-up, PLL lock, flash latency and bus dividers all succeed. The failure is the
+switch itself, or the first instruction executed at the new frequency.
+
+No `MAGIC` word was found anywhere in the block, which confirms the firmware never reached
+`store()` — the store-and-reset workaround never got a chance to run.
+
+### Recovery
+
+`probe-rs reset --connect-under-reset` does **not** recover it — most likely because nRESET is not
+wired on this board (it was listed as "recommended, not required" in the wiring table above).
+
+The only reliable recovery is to erase the flash while holding reset:
+
+```bash
+probe-rs erase --chip STM32H723ZGTx --connect-under-reset
+```
+
+Verified three times. Erasing does **not** clear RAM, which is what makes the progress-marker
+trick work.
+
+### What the workaround already achieves
+
+The store-and-reset transport **is implemented and verified at 64 MHz** (see `exp/README.md`):
+results go into `.uninit`, `SYSRESETREQ` is issued, and after reset the firmware prints the stored
+data over RTT. Two properties were confirmed the hard way:
+
+- `.uninit` really does survive a reset **and** a reflash. A stale block from a previous run
+  short-circuited a fresh measurement — the firmware happily printed yesterday's data as if it
+  were new. That bug is fixed by clearing the block before measuring.
+- the block layout and `MAGIC` round-trip correctly.
+
+What is missing is a clock configuration that survives long enough to store anything.
+
+### Suspected cause
+
+DBGMCU lives in the **D3 domain**, and the switch changes both the core supply domain (VOS0) and
+the D3/AXI clock. Either could be the trigger; it was not isolated, because each attempt costs
+another erase cycle and the board has to be assumed dead until proven otherwise.
+
+---
