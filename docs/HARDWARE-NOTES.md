@@ -630,21 +630,43 @@ Combined with the host-poke result, the best-supported explanation is now:
 > write are fetched from flash, and at 400+ MHz that fetch fails. The HardFault handler is also in
 > flash, so nothing runs and nothing is logged.
 
-### Attempted fix that did not take effect
+### The RAM-execution test: inconclusive, and a mistake on my part
 
-The obvious remedy is to execute the few instructions around the switch from RAM. Putting the
-function in `.data` (`#[link_section = ".data"]`, with and without `#[no_mangle] extern "C"`) **did
-not work with this toolchain**: `.data` stayed 4 bytes and no symbol appeared, so the attribute was
-effectively ignored and the code presumably stayed in `.text`. The attempt was reverted rather than
-left in as dead weight.
+The switch was re-implemented as a self-contained assembly routine (no `bl`, no absolute jumps),
+copied byte-for-byte into a RAM buffer at startup, and called through a function pointer — so the
+switch would execute entirely from RAM and never touch flash.
 
-The correct way is a dedicated `.ramfunc` output section in the linker script, which means
-supplying a custom `link.x` instead of cortex-m-rt's. That is the next step.
+The copy was verified to have happened:
+
+| Marker | Value | Meaning |
+|---|---|---|
+| 4 | `0xC0DE1022` | 0x22 = 34 bytes copied |
+| 6 | `0x08000476` | `__ram_switch_start` |
+| 7 | `0x08000498` | `__ram_switch_end`, exactly 0x22 bytes later |
+| 5 | **not** `0xC0DE200x` | the call never returned |
+
+So the routine was emitted, copied and entered — and the CPU still died inside it.
+
+**That does not support the fetch hypothesis**, and it does not cleanly refute it either: those 34
+bytes are hand-written assembly, and one wrong encoding would fault in exactly the same way. The
+experiment cannot tell "fetch from flash is the problem" apart from "my assembly is wrong".
+
+### A mistake worth recording
+
+While reading the progress markers back, a hard-coded address (`0x24003488`) was used even though
+the firmware prints the real one on every boot. Adding the 64-byte RAM buffer to `.bss` moved
+`.uninit` to `0x240034C8`, so several reads landed 64 bytes into the middle of the block and
+returned stale values. Two intermediate conclusions drawn from those reads were wrong.
+
+The firmware had been printing the right address the whole time (`# uninit block at 0x240034C8`).
+**Use the printed value, never a remembered one.** This is the same class of error as the earlier
+`PLLCFGR` overwrite, and it cost more time than either of the real bugs.
 
 ### Recovery
 
-`probe-rs reset --connect-under-reset` does **not** recover it — most likely because nRESET is not
-wired on this board (it was listed as "recommended, not required" in the wiring table above).
+`probe-rs reset --connect-under-reset` does **not** recover a chip stuck after a failed clock
+switch — most likely because nRESET is not wired on this board (it was listed as "recommended, not
+required" in the wiring table above).
 
 The only reliable recovery is to erase the flash while holding reset:
 
@@ -652,19 +674,20 @@ The only reliable recovery is to erase the flash while holding reset:
 probe-rs erase --chip STM32H723ZGTx --connect-under-reset
 ```
 
-Verified three times. Erasing does **not** clear RAM, which is what makes the progress-marker
-trick work.
+Verified many times. Erasing does **not** clear RAM, which is what makes the progress-marker
+technique work.
 
 ### What the workaround already achieves
 
-The store-and-reset transport **is implemented and verified at 64 MHz** (see `exp/README.md`):
+The store-and-reset transport **is implemented and verified at 200 MHz** (see `exp/README.md`):
 results go into `.uninit`, `SYSRESETREQ` is issued, and after reset the firmware prints the stored
-data over RTT. Two properties were confirmed the hard way:
+data over RTT.
+
+Two properties were confirmed the hard way:
 
 - `.uninit` really does survive a reset **and** a reflash. A stale block from a previous run
-  short-circuited a fresh measurement — the firmware happily printed yesterday's data as if it
-  were new. That bug is fixed by clearing the block before measuring.
+  short-circuited a fresh measurement — the firmware happily printed yesterday's data as if it were
+  new. Fixed by clearing the block before measuring.
 - the block layout and `MAGIC` round-trip correctly.
 
 What is missing is a clock configuration that survives long enough to store anything.
-

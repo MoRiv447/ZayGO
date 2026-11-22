@@ -292,7 +292,7 @@ repository.
 | Only one board | Interrupt and multi-core testing are limited | All experiments are single-core friendly | known |
 | STM32H7 D-Cache vs DMA coherency | Screen corruption, random crashes | Mark the framebuffer Non-Cacheable; put DMA buffers in AXI SRAM, never DTCM | recorded in the hardware notes |
 | WFI conflicts with the debug port | Cannot debug a sleeping system | Root cause of the failed `DBG_SLEEP` workaround still unknown | **unresolved** |
-| Above 200 MHz the firmware's SYSCLK switch fails | 550 MHz unmeasurable | **RCC proven capable**: with the core halted, the same register sequence reaches `SWS=PLL1` at 550 MHz from the host. So the config is right and the failure is CPU execution across the transition (fetch from flash in the cycle the clock jumps). VOS encoding bug found and fixed along the way | **blocked**, cause localised |
+| Above 200 MHz the firmware's SYSCLK switch fails | 550 MHz unmeasurable | **RCC proven capable** (`SWS=PLL1` at 550 MHz from the host with the core halted), so the config is right and the failure is CPU-side. Executing the switch from a RAM copy did not help, but the routine was hand-written assembly, so the test cannot separate "fetch problem" from "assembly bug". VOS encoding bug found and fixed along the way | **blocked**, two candidates remain |
 
 ---
 
