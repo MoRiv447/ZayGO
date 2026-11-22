@@ -115,52 +115,59 @@ over budget -> the task is suspended for the rest of this tick (forced yield to 
 
 This is a simplified version of CBS, enough to answer "can rate limiting push the interference down".
 
-### 1.6 Experiment Matrix
+### 1.6 Planned experiment matrix, and what was actually run
 
-| # | Platform | Load | Bandwidth cap | Purpose |
-|---|---|---|---|---|
-| 1 | M55 | L-A | — | **Baseline**: how accurate the system is on its own |
-| 2 | M55 | L-B | none | Magnitude of the interference in the worst case |
-| 3 | M55 | L-C | none | Magnitude of the interference under a realistic load |
-| 4 | M55 | L-C | 20% | Whether rate limiting works |
-| 5 | M55 | L-C | 5% | Whether rate limiting makes starvation worse |
-| 6 | M7 | L-A | — | Platform control: difference in switch overhead |
-| 7 | M7 | L-C | none | Platform control: difference in interference magnitude |
+The matrix below was the design intent. The **Status** column records what really happened, because
+the two diverged.
 
-**Experiment 1 is the control group**: it measures "how much jitter the real-time task has on its own, even with no interference".
-This number is the denominator of every later comparison — **without it, any claim of "3ms of interference" cannot be interpreted**
-(3ms relative to 0, or relative to 50µs?).
+| # | Platform (planned) | Load | Bandwidth cap | Purpose | Status |
+|---|---|---|---|---|---|
+| 1 | M55 | L-A | — | **Baseline**: how accurate the system is on its own | ✅ run — **on M7 (H723), not M55** |
+| 2 | M55 | L-B | none | Worst-case interference | ✅ run — on M7 |
+| 3 | M55 | L-C | none | Interference under a realistic load | ✅ run — on M7 |
+| 4 | M55 | L-C | 20% | Whether rate limiting works | ❌ not run — no bandwidth cap exists yet |
+| 5 | M55 | L-C | 5% | Whether rate limiting worsens starvation | ❌ not run — same reason |
+| 6 | M7 | L-A | — | Platform control: switch-overhead difference | ⚠️ subsumed — everything ran on M7 |
+| 7 | M7 | L-C | none | Platform control: interference difference | ⚠️ subsumed — same reason |
 
----
+**Why the platform changed**: the N647 (Cortex-M55) board is not available until the next academic
+term, so every run used the H723 (Cortex-M7). The intended M55-versus-M7 comparison is therefore
+**deferred, not dropped** — and because the scheduler is 300 lines with no hardware dependencies
+beyond the DWT counter, porting it later is a small job.
 
-## 2. Expected Deliverables
-
-| Deliverable | Form |
-|---|---|
-| Switch overhead | Context switch cycle count for M55 / M7 respectively (measured with CYCCNT, not estimated) |
-| Interference quantification | Release latency distribution over the 7 experiment points (p50/p99/p99.9/max) |
-| Rate limiting effectiveness | Comparison curves of experiment 3 vs 4 vs 5 |
-| Architecture criterion | One conclusion: is bandwidth capping mandatory or optional, and where the threshold sits |
-| Raw data | The CSV from the RTT dump, reproducible |
-
-### How to Use the Conclusion
-
-- If "unlimited interference" < 1% of the real-time task period ⇒ bandwidth capping is downgraded to a "defensive measure", and the architectural focus shifts to admission control
-- If > 10% ⇒ bandwidth capping is promoted to an "architectural cornerstone", the `budget` field must be strictly validated, and the scenario template must reject impossible declarations at compile time
-- If between 1%~10% ⇒ grading by **different criticality** is required: the real-time plane gets exclusive bandwidth, the management plane shares it, the plugin plane is restricted
+**Experiments 1 is the control group**: it measures how much jitter the real-time task has on its
+own, with no interference. This number is the denominator of every later comparison — **without
+it, a claim of "3 ms of interference" cannot be interpreted** (3 ms relative to zero, or relative
+to 50 µs?).
 
 ---
 
-## 3. Risks and Caveats
+## 2. How to interpret the result
 
-| Risk | Mitigation |
-|---|---|
-| DWT->CYCCNT measurements are inaccurate when D-Cache is enabled | Put the measurement code in ITCM; or read the counter after `__DSB()` |
-| SWO/RTT transfer itself has jitter, which pollutes the measurement | Separate sampling from transfer: store the samples in a RAM ring buffer first, then dump them all at once after the experiment |
-| Context switch written wrong (context not fully saved) | Known pitfall: the automatic stacking on M7/M55 stores only some of the registers; validate with a set of canary variables after switching back |
-| SysTick 1kHz itself has jitter | The SysTick precision of M7/M55 is sufficient; when recording `t_release`, **immediately** take the timestamp, do not wait |
-| Compiler optimization changes the timing | Use `#[inline(never)]` + `volatile` on the critical path |
-| The infinite-loop load makes observation impossible | For L-B, break in via the SysTick interrupt, do not rely on cooperative yielding |
+- Interference < 1% of the real-time task period ⇒ bandwidth capping is downgraded to a
+  "defensive measure" and the architectural focus shifts to admission control
+- Interference > 10% ⇒ bandwidth capping is promoted to an "architectural cornerstone": the
+  `budget` field must be validated at build time, and the scenario template must reject
+  declarations that are mathematically impossible
+- Between 1% and 10% ⇒ tier by criticality: the real-time plane gets exclusive bandwidth, the
+  management plane shares it, the plugin plane is capped
+
+The measured numbers landed at roughly 0%, so the first branch applies — **but read 7.4 before
+acting on that**, because it also means the experiment never reached the regime this rubric was
+written for.
+
+---
+
+## 3. Risks: anticipated versus what actually happened
+
+| Risk anticipated at design time | Mitigation planned | What actually happened |
+|---|---|---|
+| DWT->CYCCNT inaccurate once D-Cache is on | Put the measurement code in ITCM, or read after `__DSB()` | Not exercised — cache was left off, so this stays untested |
+| RTT transfer jitter pollutes the measurement | Sample into a RAM ring buffer, dump afterwards | Sequence was right, but **the dump silently dropped about 30% of the samples** — see the RTT pitfall in `exp01/README.md` |
+| Context switch written wrong (state not fully saved) | Canary variables to validate after switching back | **This is the bug that actually hit** — though not through canaries. It was found by reading `CFSR` and the saved context. The canaries were never added |
+| SysTick 1 kHz itself jitters | Timestamp immediately at release, never defer | Fine: period p50 came out at exactly 64,000 cycles |
+| Compiler optimisation changes the timing | `#[inline(never)]` + volatile on the critical path | Fine: the naked function was verified by disassembly |
+| The infinite-loop load blocks observation | Break in via SysTick, no cooperative yield | Fine |
 
 ---
 
@@ -177,37 +184,52 @@ Stated honestly, to avoid later misuse:
 
 ---
 
-## 5. Deliverables Checklist
+## 5. What was actually delivered
 
 ```
 exp01/
-├── README.md              # this document
-├── Cargo.toml
+├── README.md / README.zh-CN.md
+├── Cargo.toml / Cargo.lock
+├── build.rs
+├── memory.x                 # flash / RAM regions
+├── .cargo/config.toml       # target, runner, --chip
 ├── src/
-│   ├── main.rs            # entry point, pick the experiment number
-│   ├── sched.rs           # minimal preemptive scheduler (~300 lines)
-│   ├── context.rs         # naked context switch
-│   ├── time.rs            # DWT->CYCCNT wrapper
-│   ├── load.rs            # L-B / L-C loads
-│   ├── measure.rs         # sampling and percentile statistics
-│   └── rtt.rs             # result dump
-│
-│   ├── parse.py           # CSV -> distribution plot
-│   └── RESULTS.md         # experiment conclusions (to fill in)
+│   ├── main.rs              # entry point, pick the experiment point
+│   ├── sched.rs             # minimal preemptive scheduler
+│   ├── context.rs           # naked context switch
+│   ├── time.rs              # DWT->CYCCNT wrapper
+│   ├── load.rs              # Idle / Spin / Web loads
+│   └── measure.rs           # sample buffer + CSV dump
+├── analysis/
+│   └── parse.py             # percentile statistics and interpretation
+└── out-{idle,spin,web}.csv  # raw measured data, committed as evidence
 ```
 
----
+Two files that the design sketch listed were not built, and the reason matters:
 
-## 6. Recommended Execution Order
+- **`src/rtt.rs`** — RTT output ended up in `measure.rs`, because the dump is inseparable from
+  the sample buffer and splitting them would only have added a module boundary for its own sake.
+- **`scripts/`** — flashing is just `cargo run`, since the runner in `.cargo/config.toml` already
+  invokes probe-rs. A shell script around it would have been one more thing to keep in sync.
 
-1. **Do experiment 1 (baseline) alone first**. If the baseline jitter is already several milliseconds, the measurement method itself has a problem (or SysTick precision is insufficient),
-   and every later experiment is untrustworthy. The baseline is the foundation of all experiments.
-2. Experiment 2 (full CPU load) → obtain the worst-case interference upper bound.
-3. Experiment 3 (simulated Web) → obtain the realistic interference.
-4. Experiment 4/5 (rate limiting) → verify the effectiveness of the mechanism.
-5. Experiment 6/7 (M7 control) → confirm the platform difference; if the difference is large, the architecture must be configured per platform.
+## 6. Execution order: planned versus actual
 
-**Do not start with all 7 at once**. Getting experiment 1 running on its own and confirming that the numbers make sense is the precondition for moving to the next step.
+The design said: run 1 alone first, then 2, then 3, then 4/5, then 6/7.
+
+What actually happened:
+
+| Step | Planned | Actual |
+|---|---|---|
+| 1 | Baseline only, confirm the numbers are sane | ✅ done. **It immediately caught a real bug** — see 7.4 |
+| 2 | Full CPU load | ✅ done |
+| 3 | Simulated Web load | ✅ done |
+| 4/5 | Rate limiting at 20% and 5% | ❌ skipped: there is no bandwidth cap to test yet |
+| 6/7 | M7 platform control | ⚠️ moot: every run was already on M7 |
+
+**The "baseline first" rule earned its place.** Running the baseline alone is what surfaced the
+swapped `SHPR3` bit fields: without a clean baseline, the resulting HardFault would have looked
+like a context-switch bug rather than a priority-configuration bug, and the search would have
+started in the wrong file.
 
 ---
 

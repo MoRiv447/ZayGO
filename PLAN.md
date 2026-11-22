@@ -323,46 +323,42 @@ template schema in P5 can be settled.
 
 ---
 
-## Appendix A: Pre-publication checklist
+## Appendix A: Publication record
 
-Before making the repository public, confirm each item. The first three **need a decision**;
-the rest can be handled on approval.
+The repository is public: **https://github.com/MoRiv447/ZayGO** (MIT, `main` branch).
 
-### Requires a decision
+### Decisions made
 
-| # | Item | Note |
+| # | Item | Decision |
 |---|---|---|
-| 1 | **Licence** | ✅ **decided: MIT.** `LICENSE` added. Compatible with the whole dependency tree (`rtt-target` is MIT/Apache-2.0, `cortex-m` / `cortex-m-rt` are Apache-2.0) |
-| 2 | **Repository name and description** | ✅ **decided: ZayGO.** Renaming after publication breaks links, so this is the moment to fix it |
-| 3 | **Whether to name the hardware** | ✅ **decided: name it.** Board and probe models are public product names, not personal information, and naming them lets others reproduce the results. Listed under "Verified on hardware" in the README |
+| 1 | Licence | **MIT.** Compatible with the whole dependency tree (`rtt-target` is MIT/Apache-2.0, `cortex-m` / `cortex-m-rt` are Apache-2.0) |
+| 2 | Name and description | **ZayGO.** Description: "Turning RTOS timing guarantees from a documentation promise into something the kernel can check, verify and prove." |
+| 3 | Naming the hardware | **Yes.** Board and probe models are public product names, not personal information; listed under "Verified on hardware" in the README |
 
-### Handled
+### Handled before publication
 
 | # | Item | Status |
 |---|---|---|
-| 4 | Personal information scan | ✅ done: no name, affiliation, contact details or home directories |
-| 5 | Local absolute paths | ✅ done: the schematic path in `HARDWARE-NOTES.md` replaced with a relative description |
+| 4 | Personal information scan | ✅ no name, affiliation, contact details or home directories |
+| 5 | Local absolute paths | ✅ the schematic path in `HARDWARE-NOTES.md` replaced with a relative description |
 | 6 | `.workbuddy/` excluded | ✅ in `.gitignore` (contains personal context and memory) |
 | 7 | `.tmp/` excluded | ✅ in `.gitignore` |
 | 8 | Firmware artifacts excluded | ✅ `target/` excluded |
 | 9 | Line endings unified | ✅ `.gitattributes`: text LF, binaries untouched |
-| 10 | CI | ✅ `.github/workflows/ci.yml`: firmware build plus analysis script syntax check |
+| 10 | CI | ✅ `.github/workflows/ci.yml`: firmware build plus analysis script syntax check; both runs green |
 | 11 | Toolchain pinned | ✅ `rust-toolchain.toml`: thumbv7em target, MSRV 1.88 noted |
 | 12 | Documentation self-consistency | ✅ the README's "current state" matches the measured data in `docs/EXPERIMENT-01.md` |
 | 13 | `LICENSE` file | ✅ added |
 | 14 | Bilingual structure, English first | ✅ every document has an English primary and a `.zh-CN.md` translation, with switch links both ways |
 | 15 | Internal links validated | ✅ zero broken links across all `.md` files |
+| 16 | Commit author address | ✅ rewritten to the GitHub noreply address **before** the first push. Commit hashes changed as a result (`dab3db7` → `3936d7a`, and so on) — this rewrite is only free before the first push |
 
-### Recommended before publishing
+### Still open
 
-| # | Item | Reason |
+| # | Item | Why it matters |
 |---|---|---|
-| 16 | Run the CI equivalents locally | `cd exp01 && cargo build --release` and `python -m py_compile exp01/analysis/parse.py` |
-| 17 | Have someone who was not involved follow the README | That is exactly the acceptance criterion for the "reproducibility" row |
-| 18 | Consider a GitHub noreply commit address | The current commit author address is a personal one; `157698097+MoRiv447@users.noreply.github.com` keeps it off the public commit log |
-
-
----
+| 1 | Independent reproduction | Have someone who was not involved follow the README from scratch. That is the acceptance criterion for the "reproducibility" row in section 1; an untested instruction set is a guess |
+| 2 | MSRV is claimed but not tested | CI only exercises `stable`; the stated minimum of Rust 1.88 is never built automatically |
 
 ## Appendix B: The pitfalls hit so far
 
