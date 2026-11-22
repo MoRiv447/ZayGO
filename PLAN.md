@@ -328,14 +328,16 @@ So the order changes:
 each critical section's budget; the build fails when a declaration exceeds the allowance; a
 runtime monitor compares measured against declared. See [`docs/MASK-BUDGET.md`](docs/MASK-BUDGET.md).
    It caught two of my own mis-declarations within the hour.
-2. **Experiment 03: re-run with cache enabled** — cache is off after reset, real products enable
-   it, and it changes the WCET characteristics of both dispatch and critical sections.
-3. **Configure the PLL to 550 MHz and re-run both experiments** — the current absolute numbers
-   (6.1 µs baseline, 1:1 slope) cannot be extrapolated to the target frequency, though the
-   structural 1:1 relationship should survive.
+2. ✅ **Experiment 03: re-run with cache enabled** — done 2026-11-22. The constant falls
+   283 → 122 cycles (−57 %), the 1:1 slope does not move. Confirms the masking rule is structural
+   and needs no per-configuration calibration. See [`docs/EXPERIMENT-03.md`](docs/EXPERIMENT-03.md).
+3. **Configure the PLL to 550 MHz and re-run** — the remaining unknown. The absolute cycle counts
+   cannot be extrapolated, and the 57 % cache benefit is likely *larger* there because flash wait
+   states dominate more. The 1:1 slope should survive, but that is a prediction, not yet a
+   measurement.
 
-With these three done, the architecture's "real-time plane budget" is expressed in the right unit
-(mask duration, not CPU percentage) and the P5 template schema can be settled.
+With the PLL run done, the remaining unknown is the target frequency, and the P5 template schema
+can be settled.
 
 ---
 

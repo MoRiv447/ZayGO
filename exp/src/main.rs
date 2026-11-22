@@ -9,6 +9,7 @@
 #![no_main]
 #![allow(static_mut_refs)]
 
+mod cache;
 mod context;
 mod crit;
 mod load;
@@ -27,6 +28,25 @@ use rtt_target::{rprintln, rtt_init_print};
 /// | `Mode::Spin`  | 实验 2 满载 CPU    |
 /// | `Mode::Web`   | 实验 3 模拟 Web    |
 const MODE: load::Mode = load::Mode::Mask;
+
+/// L1 缓存配置。实验 01/02 用 `Off`，实验 03 用 `I` 与 `ID` 做两档对照。
+///
+/// 用常量而不是运行时开关：缓存必须在任何计时开始之前就确定状态，
+/// 中途切换会让同一批样本处于两种条件下，数据无法归因。
+///
+/// 拆成两档的目的：把"代码取指变快"和"数据访问变快"的贡献分开。
+/// 只报一个"I+D 一共省了多少"，说不清是哪一半省下来的。
+const CACHE_MODE: CacheMode = CacheMode::Off;
+
+#[derive(Clone, Copy, PartialEq)]
+enum CacheMode {
+    /// 全关（复位默认）。
+    Off,
+    /// 只开 I-Cache。
+    I,
+    /// I-Cache + D-Cache。
+    ID,
+}
 
 /// 让调试口在 WFI / Sleep 期间保持在线。
 ///
@@ -62,6 +82,18 @@ fn main() -> ! {
     unsafe {
         keep_debug_in_sleep();
     }
+
+    if CACHE_MODE != CacheMode::Off {
+        cache::enable_icache();
+    }
+    if CACHE_MODE == CacheMode::ID {
+        cache::enable_dcache();
+    }
+    rprintln!(
+        "# cache: icache={} dcache={}",
+        cache::icache_enabled(),
+        cache::dcache_enabled()
+    );
 
     // SysTick 必须在调度器初始化之后才能开：init 里设置的是中断优先级，
     // 顺序反了会让第一次 tick 落在一个尚未配置好 PendSV 优先级的系统上。

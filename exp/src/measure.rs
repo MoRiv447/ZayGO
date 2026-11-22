@@ -23,6 +23,7 @@
 
 use rtt_target::rprintln;
 
+use crate::cache;
 use crate::crit;
 use crate::load;
 use crate::sched;
@@ -184,6 +185,10 @@ fn stop_tick() {
     unsafe {
         (0xE000_E010 as *mut u32).write_volatile(0);
     }
+    // 关键：dump 前必须把 D-Cache 清干净再关掉。
+    // 否则 rprintln! 写进 cache 的字符脏在 cache 里，probe-rs 通过 SWD 读 RAM
+    // 只能读到旧数据 —— 表现为"输出莫名缺行"，且不报任何错。
+    cache::prepare_for_rtt();
 }
 
 /// 用 bkpt 结束，作为"我跑完了"的信号。probe-rs 会因此以非零码退出，属正常。

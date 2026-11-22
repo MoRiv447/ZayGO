@@ -217,6 +217,29 @@ scenario template. Full write-up: [`docs/EXPERIMENT-02.md`](docs/EXPERIMENT-02.m
 
 ---
 
+### Experiment 03: L1 caches on (2026-11-22)
+
+Same masking sweep, three cache configurations.
+
+| `dispatch` p50 | Off | I-Cache | I+D-Cache |
+|---|---|---|---|
+| cycles | 283 | 197 | **122** |
+| saved vs previous step | — | −86 (53 %) | −75 (47 %) |
+
+| Δ/mask (the slope) | Off | I-Cache | I+D-Cache |
+|---|---|---|---|
+| at mask = 16000 | 100.1 % | 100.0 % | 100.0 % |
+
+**Caching cuts the constant by 57 % and leaves the slope untouched.** The 1:1 masking
+relationship is structural, not microarchitectural — which is what experiment 02 predicted, and
+what makes a single budget rule valid across cache configurations.
+
+Code fetch and data access split the saving almost evenly (53 % / 47 %), which is only visible
+because the experiment was run three ways rather than two.
+Full write-up: [`docs/EXPERIMENT-03.md`](docs/EXPERIMENT-03.md).
+
+---
+
 ---
 
 ## Where the project stands
@@ -380,6 +403,7 @@ ZayGO/
 | [`docs/HARDWARE-NOTES.md`](docs/HARDWARE-NOTES.md) | Board identity, pin assignment, USB Host power circuit, capacitor selection |
 | [`docs/EXPERIMENT-01.md`](docs/EXPERIMENT-01.md) | Experiment 01: design, measured results, interpretation, limitations |
 | [`docs/EXPERIMENT-02.md`](docs/EXPERIMENT-02.md) | Experiment 02: interrupt-masking sensitivity, measured results |
+| [`docs/EXPERIMENT-03.md`](docs/EXPERIMENT-03.md) | Experiment 03: re-running with L1 caches — constant falls 57 %, slope unchanged |
 | [`docs/MASK-BUDGET.md`](docs/MASK-BUDGET.md) | **Build-time interrupt-masking budget**: manifest, hard build failure, runtime monitor |
 | [`exp/README.md`](exp/README.md) | Implementation details, **four hardware pitfalls hit**, troubleshooting checklist |
 

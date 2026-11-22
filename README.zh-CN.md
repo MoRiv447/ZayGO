@@ -183,6 +183,27 @@ P0 的产出：自研最小抢占式调度器在 STM32H723（**64 MHz HSI，未�
 
 ---
 
+### 实验 03：开启 L1 缓存（2026-11-22）
+
+同一套屏蔽扫描，三种缓存配置。
+
+| `dispatch` p50 | Off | 只开 I-Cache | I+D-Cache |
+|---|---|---|---|
+| 周期 | 283 | 197 | **122** |
+| 相对上一档省下 | — | −86（53%） | −75（47%） |
+
+| Δ/mask（斜率） | Off | 只开 I-Cache | I+D-Cache |
+|---|---|---|---|
+| mask = 16000 时 | 100.1% | 100.0% | 100.0% |
+
+**缓存把常数砍掉 57%，斜率一点没动。** 1:1 的屏蔽关系是结构性的、不是微架构性的 ——
+这正是实验 02 的预判，也正是「一条预算规则能跨缓存配置成立」的前提。
+
+取指与数据访问几乎各占一半（53% / 47%），这个拆分只有跑三档而不是两档才看得出来。
+完整报告见 [`docs/EXPERIMENT-03.md`](docs/EXPERIMENT-03.md)。
+
+---
+
 ---
 
 ## 现在到哪一步了
@@ -339,6 +360,7 @@ ZayGO/
 | [`docs/HARDWARE-NOTES.md`](docs/HARDWARE-NOTES.md) | 板子实测身份、引脚分配、USB Host 供电电路、电容选型 |
 | [`docs/EXPERIMENT-01.md`](docs/EXPERIMENT-01.md) | 实验 01：设计、实测结果、判读与局限 |
 | [`docs/EXPERIMENT-02.md`](docs/EXPERIMENT-02.md) | 实验 02：屏蔽中断的敏感度、实测结果 |
+| [`docs/EXPERIMENT-03.md`](docs/EXPERIMENT-03.md) | 实验 03：开启 L1 缓存复测 —— 常数降 57%，斜率不变 |
 | [`docs/MASK-BUDGET.md`](docs/MASK-BUDGET.md) | **构建期中断屏蔽预算**：清单、硬失败、运行期监视 |
 | [`exp/README.md`](exp/README.md) | 实验 01 的实现细节、**四个上板踩过的坑**、排查清单 |
 
