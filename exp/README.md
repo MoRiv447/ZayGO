@@ -279,3 +279,79 @@ After running all three modes, put the three `max` values side by side:
 The measured numbers came out at roughly 0% interference, which **falsifies the premise of the
 original criterion** — see section 7 of `docs/EXPERIMENT-01.md` for why, and what the real
 threat dimensions are.
+
+---
+
+## P1: serial CLI and the device API
+
+Plan 9-style naming, non-blocking semantics, no allocator.
+
+### Devices
+
+| Path | Access | Behaviour |
+|---|---|---|
+| `/stat/sched` | read | `cpu_hz`, `overruns`, `tick_missed`, `samples` |
+| `/stat/measure` | read | buffer fill, stage count, per-stage size |
+| `/stat/crit` | read | the interrupt-masking budget measured at runtime |
+| `/dev/log` | read/write | 8-line ring; **drops the oldest rather than ever blocking** |
+| `/dev/led` | write | on-board blue LED on PG7; `on` / `off` / `toggle` |
+
+### Commands
+
+```
+ls
+cat <path>
+echo <text> > <path>
+help
+```
+
+A read handler returns `Result<(), ()>`; `Err` prints `(not ready)` rather than pretending success.
+That is the non-blocking rule from the plan, expressed in the type signature instead of a comment.
+
+### Where the CLI runs
+
+In the **LOAD task** — the lowest priority — deliberately. A console is untrusted load: it is slow,
+it may block on I/O, and it must not be able to touch the real-time plane.
+
+Measured: while 15 scripted commands executed back to back, `overruns = 0` and
+`tick_missed = 0`. The real-time task never noticed.
+
+### Console is an abstraction, and that is not decoration
+
+`cli::out()` writes through a `Console` enum with two back ends: `Rtt` and `Uart`. The RTT back end
+exists because **there is no USB-TTL adapter here**, so the UART path cannot be exercised yet.
+The logic was verified end to end over RTT; the UART back end is written but **not verified on
+hardware** — USART1 shares the 2×4 header with SWD, so it needs a separate 3-wire hookup.
+
+Both facts are stated rather than glossed: the scripted replay below is real output from the board.
+
+```
+zaygo> ls
+r-  /stat/sched          实时面运行快照
+r-  /stat/measure        采样缓冲状态
+r-  /stat/crit           中断屏蔽预算实测值
+rw  /dev/log             环形日志；满了丢最旧的，永不阻塞
+-w  /dev/led             板载蓝灯 PG7；写 on/off/toggle
+zaygo> cat /dev/log
+(not ready)
+zaygo> echo first line > /dev/log
+ok, buffered
+zaygo> cat /dev/log
+ 1: first line
+zaygo> cat /nope
+err: 没有这个设备: /nope
+zaygo> echo x > /stat/sched
+err: /stat/sched 是只读的
+zaygo> echo nonsense > /dev/led
+err: 只接受 on / off / toggle
+```
+
+The LED write was checked against hardware: after `on` then `toggle`, `GPIOG.ODR` bit 7 reads 0.
+The command actually moved a pin.
+
+### What is deliberately missing
+
+`/dev/actuator/*/ctl` and `/ctl/sched/admit` from the plan are **not implemented**. The rule that
+"every write is a submitted request executed by the real-time plane, with an asynchronous ack"
+is the whole point of P1, and faking it with a direct `ODR` write would be worse than not having it.
+`/dev/led` is honest about what it is: a status indicator, not an actuator with a control loop.

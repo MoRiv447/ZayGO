@@ -262,3 +262,77 @@ Error: An ARM specific error occurred.
 | 无限制干扰 < 周期 1% | 带宽限制降级为防御性措施，重心转向准入控制 |
 | 无限制干扰 > 周期 10% | 带宽限制升为架构基石，`budget` 字段必须编译期校验 |
 | 介于两者之间 | 需要按临界性分级：实时面独占、管理面共享、插件面受限 |
+
+---
+
+## P1：串口 CLI 与设备 API
+
+Plan 9 风格命名、非阻塞语义、不用分配器。
+
+### 设备
+
+| 路径 | 权限 | 行为 |
+|---|---|---|
+| `/stat/sched` | 读 | `cpu_hz`、`overruns`、`tick_missed`、`samples` |
+| `/stat/measure` | 读 | 缓冲填充、档位数、每档样本数 |
+| `/stat/crit` | 读 | 运行期实测的中断屏蔽预算 |
+| `/dev/log` | 读写 | 8 行环形日志；**满了丢最旧的，永不阻塞** |
+| `/dev/led` | 写 | 板载蓝灯 PG7；`on` / `off` / `toggle` |
+
+### 命令
+
+```
+ls
+cat <path>
+echo <text> > <path>
+help
+```
+
+读处理器返回 `Result<(), ()>`，`Err` 打印 `(not ready)` 而不是假装成功。
+这就是计划里的非阻塞规则 —— 用类型签名表达，而不是写一句注释。
+
+### CLI 跑在哪里
+
+**LOAD 任务里**，也就是最低优先级，这是刻意的。控制台属于不可信负载：
+它慢、可能阻塞在 I/O 上，而且绝不能碰到实时面。
+
+实测：15 条脚本命令连续执行期间，`overruns = 0`、`tick_missed = 0`。实时任务毫无察觉。
+
+### 控制台是可替换的抽象，这不是装饰
+
+`cli::out()` 通过 `Console` 枚举输出，两个后端：`Rtt` 与 `Uart`。RTT 后端存在的原因是
+**手上没有 USB-TTL**，串口那条路现在没法验证。逻辑已通过 RTT 端到端验证；
+UART 后端代码写好但**未上机验证** —— USART1 与 SWD 共用那个 2×4 排针，需要单独接三根线。
+
+两件事都如实说明、不含糊。下面这段回放是板子上的真实输出：
+
+```
+zaygo> ls
+r-  /stat/sched          实时面运行快照
+r-  /stat/measure        采样缓冲状态
+r-  /stat/crit           中断屏蔽预算实测值
+rw  /dev/log             环形日志；满了丢最旧的，永不阻塞
+-w  /dev/led             板载蓝灯 PG7；写 on/off/toggle
+zaygo> cat /dev/log
+(not ready)
+zaygo> echo first line > /dev/log
+ok, buffered
+zaygo> cat /dev/log
+ 1: first line
+zaygo> cat /nope
+err: 没有这个设备: /nope
+zaygo> echo x > /stat/sched
+err: /stat/sched 是只读的
+zaygo> echo nonsense > /dev/led
+err: 只接受 on / off / toggle
+```
+
+`/dev/led` 的写入对着硬件核过：`on` 再 `toggle` 之后，`GPIOG.ODR` 的 bit7 读回 0。
+命令确实动了引脚。
+
+### 刻意没做的部分
+
+计划里的 `/dev/actuator/*/ctl` 与 `/ctl/sched/admit` **没有实现**。
+"每次写入都是一个提交请求、由实时面执行后异步确认"正是 P1 的核心，
+用一次直接的 `ODR` 写入去冒充它，比不做更糟。
+`/dev/led` 对自己的定位是诚实的：它是状态指示灯，不是带控制环的执行器。

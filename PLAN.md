@@ -114,7 +114,7 @@ the bandwidth cap is required.
 
 ---
 
-### P1 — Serial CLI and the device API
+### P1 — Serial CLI and the device API (first slice done)
 
 **What it does**: turns "a device" into something that can be named, addressed and operated.
 
