@@ -56,7 +56,7 @@ pub fn record(t_start: u32, t_release: u32) {
         let dispatch = t_start.wrapping_sub(t_release);
         // 理想释放点是 `origin + k * PERIOD`，不是 `k * PERIOD` ——
         // CYCCNT 清零与 SysTick 使能之间有几百周期的间隔，见 sched::ORIGIN。
-        let phase = t_start.wrapping_sub(sched::origin()) % time::CYCLES_PER_MS;
+        let phase = t_start.wrapping_sub(sched::origin()) % time::cycles_per_ms();
         let period = if HAS_PREV {
             t_start.wrapping_sub(PREV_START)
         } else {

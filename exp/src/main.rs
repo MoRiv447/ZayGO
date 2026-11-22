@@ -10,6 +10,7 @@
 #![allow(static_mut_refs)]
 
 mod cache;
+mod clock;
 mod context;
 mod crit;
 mod load;
@@ -28,6 +29,15 @@ use rtt_target::{rprintln, rtt_init_print};
 /// | `Mode::Spin`  | 实验 2 满载 CPU    |
 /// | `Mode::Web`   | 实验 3 模拟 Web    |
 const MODE: load::Mode = load::Mode::Mask;
+
+/// 是否切到 PLL 550MHz。实验 01/02/03 用 `false`（复位默认 HSI 64MHz），
+/// 实验 04 用 `true`。
+///
+/// 做成常量而不是运行时开关，理由同缓存：频率必须在任何计时开始之前就定下来。
+const USE_PLL: bool = false;
+
+/// 诊断阶段。先用 `Lock` 确认 PLL 参数本身没问题，再改 `Full`。
+const PLL_STAGE: clock::Stage = clock::Stage::Lock;
 
 /// L1 缓存配置。实验 01/02 用 `Off`，实验 03 用 `I` 与 `ID` 做两档对照。
 ///
@@ -72,16 +82,27 @@ fn main() -> ! {
     rtt_init_print!(rtt_target::ChannelMode::BlockIfFull, 4096);
 
     rprintln!("=== exp01: 抢占式调度器干扰量化 ===");
-    rprintln!("# CPU {} Hz（复位默认 HSI，未配 PLL）", time::CPU_HZ);
+    rprintln!("# CPU {} Hz", time::cpu_hz());
     rprintln!("# 周期 1ms，样本上限 {}", measure::CAP);
     rprintln!("# 模式 {:?}", MODE as u8);
-
-    time::init();
 
     // 必须在任何 WFI 之前完成，否则调试口先失联就再也改不了了
     unsafe {
         keep_debug_in_sleep();
     }
+
+    // 时钟必须在 time::init 之前定下来：CYCCNT 清零的时刻要与最终频率一致，
+    // 否则所有周期数与时间的换算都会偏。
+    if USE_PLL {
+        match clock::init(PLL_STAGE) {
+            Ok(hz) => rprintln!("# clock: PLL OK, CPU {} Hz", hz),
+            Err(e) => rprintln!("# clock: PLL 配置失败（{}），继续跑 {} Hz", e, clock::cpu_hz()),
+        }
+    } else {
+        rprintln!("# clock: HSI (reset default) {} Hz", clock::cpu_hz());
+    }
+
+    time::init();
 
     if CACHE_MODE != CacheMode::Off {
         cache::enable_icache();
@@ -104,7 +125,7 @@ fn main() -> ! {
     let cp = cortex_m::Peripherals::take().unwrap();
     let mut syst = cp.SYST;
     syst.set_clock_source(cortex_m::peripheral::syst::SystClkSource::Core);
-    syst.set_reload(time::CYCLES_PER_MS - 1);
+    syst.set_reload(time::cycles_per_ms() - 1);
     syst.clear_current();
     syst.enable_interrupt();
     syst.enable_counter();

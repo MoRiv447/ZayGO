@@ -479,6 +479,79 @@ STM32 LTDC 手册（适用 H7 / N6）：
 
 ---
 
+## 九、切到 550MHz 会打断 SWD 调试链路
+
+**2026-11-22 尝试。PLL 参数验证正确；切换过程不可调试。**
+
+### 验证正确的部分
+
+从板厂参考例程抄来的 PLL 配置是对的。锁定后的读回：
+
+```
+# clk[3] HSE ready, RCC_CR=0x00034025
+# clk[5] PLL locked: CR=0x03034025 DIVR=0x010100db
+```
+
+`DIVR=0x010100DB` 解出来是 `N1=219`、`P1=0`、`Q1=1`、`R1=1` ——
+正好印证了"N/P/Q/R 存减一"这个实现细节。`CR` 里 `HSEON|HSERDY|PLL1ON|PLL1RDY` 全置位。
+
+所以 HSE 25MHz / M=10 / N=220 / P=1 = 550MHz 是合法配置，芯片能锁。
+
+### 失败的部分
+
+执行 **VOS0 电压等级切换 + SYSCLK 切换** 之后，SWD 访问端口失效：
+
+```
+Error: Failed to read register DRW ... Target device responded with a WAIT response
+```
+
+而且**不确定**。同一份固件跑两次：
+
+| 次 | 最后打印出的行 |
+|---|---|
+| 1 | `# clk[5] PLL locked …`（走过了 VOS0、HSE、PLL） |
+| 2 | `# clk[1] PWR_CR3=… (LDOEN set)`（在 VOS0 切换前就死了） |
+
+同样的代码、不同的死点 ⇒ 不是参数错误，是供电/时钟域切换在破坏调试逻辑。
+
+### 恢复方法
+
+`probe-rs reset --connect-under-reset` **救不回来** —— 大概率因为这块板的 nRESET 没接
+（探针接线表里它被列为"建议接，非必需"）。
+
+唯一可靠的恢复是在保持复位的状态下擦除 flash：
+
+```bash
+probe-rs erase --chip STM32H723ZGTx --connect-under-reset
+```
+
+验证过两次。擦除后 CPU 不再跑坏固件，AP 恢复可达。
+
+### 怀疑的原因
+
+DBGMCU 在 **D3 域**，所以 VOS0 供电切换和 D3PPRE 变更都可能干扰调试逻辑。
+究竟哪个是主因没有隔离出来——每次尝试都要付一次擦除的代价。
+
+### 下一步可以试的绕法
+
+不要依赖 550MHz 下的实时 RTT，改成：
+
+1. 按目标时钟跑完测量，样本照常写进 RAM
+2. 完成时写入一个 magic word + 长度，然后触发 `SYSRESETREQ`
+3. 复位后芯片回到 HSI 64MHz，AP 可用
+4. 用 `probe-rs read` 直接读那段 RAM
+
+周期数仍然有效（它们是在高时钟下测的），只是**传输通道**换了。
+这和"先存 RAM 环形缓冲再统一 dump"是同一个思路，只是下沉了一层。
+
+### 对项目的后果
+
+绝对时间数值仍是 64MHz 的。**1:1 的屏蔽斜率不受影响** ——
+它已经在三种缓存配置下被证明是结构性的（见 [`EXPERIMENT-03.md`](EXPERIMENT-03.md)），
+而频率属于同一类微架构参数。
+
+---
+
 ## 八、引用来源
 
 | 结论 | 来源 |

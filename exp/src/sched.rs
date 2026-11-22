@@ -185,18 +185,18 @@ fn on_tick() {
     let t = time::now();
     // 只在第一个 tick 记一次：之后 tick 都落在同一相位上
     if !ORIGIN_SET.swap(true, Ordering::Relaxed) {
-        ORIGIN.store(t % time::CYCLES_PER_MS, Ordering::Relaxed);
+        ORIGIN.store(t % time::cycles_per_ms(), Ordering::Relaxed);
         EXPECTED.store(t, Ordering::Relaxed);
     } else {
         let exp = EXPECTED
             .load(Ordering::Relaxed)
-            .wrapping_add(time::CYCLES_PER_MS);
+            .wrapping_add(time::cycles_per_ms());
         let late = t.wrapping_sub(exp);
         // 守卫：`t < exp` 时 wrapping_sub 会把差变成约 2^32 的天文数字，
         // 除掉周期正好得到 67173 这种"看似合理"的假值。必须挡掉。
         // 上限取 4 个周期，足够覆盖最长的屏蔽档位（96000 = 1.5 周期）。
-        let n = if late < time::CYCLES_PER_MS * 4 {
-            late / time::CYCLES_PER_MS
+        let n = if late < time::cycles_per_ms() * 4 {
+            late / time::cycles_per_ms()
         } else {
             0
         };
@@ -205,7 +205,7 @@ fn on_tick() {
             // **必须重新对齐**：早期版本漏了这一步，漂移会被后续每个 tick 反复累加，
             // 一个 128 样本的档位报出 4200 这种量级的假数字。
             // 对齐之后，每次只统计"这一拍到底吞了几个整周期"。
-            EXPECTED.store(exp.wrapping_add(n * time::CYCLES_PER_MS), Ordering::Relaxed);
+            EXPECTED.store(exp.wrapping_add(n * time::cycles_per_ms()), Ordering::Relaxed);
         } else {
             EXPECTED.store(exp, Ordering::Relaxed);
         }

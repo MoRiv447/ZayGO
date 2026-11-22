@@ -137,7 +137,7 @@ pub fn load_iteration() {
 fn mask_round() {
     let m = current_mask();
 
-    let period = time::CYCLES_PER_MS;
+    let period = time::cycles_per_ms();
     let origin = sched::origin();
     /// 提前量。必须明显大于 `cpsid i` 的调用开销（实测约 20 周期），
     /// 但又要远小于最小的屏蔽时长（500），否则小档位会被提前量淹没。

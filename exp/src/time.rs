@@ -13,18 +13,18 @@ const DWT_CYCCNT: *mut u32 = 0xE000_1004 as *mut u32;
 const DEMCR_TRCENA: u32 = 1 << 24;
 const DWT_CTRL_CYCCNTENA: u32 = 1 << 0;
 
-/// 复位后的系统时钟。
+/// 当前实际运行频率。
 ///
-/// H723 复位默认走 HSI 64MHz，本实验**刻意不配 PLL**：
-///   - PLL 配错会直接挂死且没有任何输出，调试成本极高
-///   - 本实验测的是「有负载 vs 无负载」的**相对**差异，
-///     64MHz 还是 550MHz 不改变结论方向
-///
-/// 若后续加了 PLL 配置，此常量必须同步修改，否则所有换算都是错的。
-pub const CPU_HZ: u32 = 64_000_000;
+/// 从 `clock` 模块取，不是常量：实验 01/02/03 跑在复位默认的 64MHz HSI 上，
+/// 实验 04 切到 PLL 的 550MHz。所有周期→时间的换算都必须走这个函数，
+/// 否则换频之后每一个微秒数都是错的（而且错得很自然，不会有人发现）。
+pub use crate::clock::cpu_hz;
 
-/// 1ms 对应的周期数。
-pub const CYCLES_PER_MS: u32 = CPU_HZ / 1000;
+/// 1ms 对应的周期数。SysTick 重装载值也用它。
+#[inline(always)]
+pub fn cycles_per_ms() -> u32 {
+    cpu_hz() / 1000
+}
 
 pub fn init() {
     unsafe {
@@ -55,5 +55,5 @@ pub fn elapsed(from: u32) -> u32 {
 /// 上下文切换的假设就全变了）。
 #[allow(dead_code)]
 pub fn cycles_to_us(cycles: u32) -> u32 {
-    cycles / (CPU_HZ / 1_000_000)
+    cycles / (cpu_hz() / 1_000_000)
 }

@@ -292,6 +292,7 @@ repository.
 | Only one board | Interrupt and multi-core testing are limited | All experiments are single-core friendly | known |
 | STM32H7 D-Cache vs DMA coherency | Screen corruption, random crashes | Mark the framebuffer Non-Cacheable; put DMA buffers in AXI SRAM, never DTCM | recorded in the hardware notes |
 | WFI conflicts with the debug port | Cannot debug a sleeping system | Root cause of the failed `DBG_SLEEP` workaround still unknown | **unresolved** |
+| VOS0 / SYSCLK switch breaks the SWD link | 550 MHz is unmeasurable over live RTT, non-deterministically | RAM-buffer + `SYSRESETREQ` + read-back after reset; recovery is `probe-rs erase --connect-under-reset` | **blocked**, workaround identified |
 
 ---
 

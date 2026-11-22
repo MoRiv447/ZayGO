@@ -504,6 +504,83 @@ STM32 LTDC manual (applies to H7 / N6):
 
 ---
 
+## 9. Switching to 550 MHz breaks the SWD link
+
+**Attempted 2026-11-22. PLL parameters verified correct; the switch itself is not debuggable.**
+
+### What was verified
+
+The PLL configuration copied from the vendor reference example is right. Readback after lock:
+
+```
+# clk[3] HSE ready, RCC_CR=0x00034025
+# clk[5] PLL locked: CR=0x03034025 DIVR=0x010100db
+```
+
+`DIVR=0x010100DB` decodes to `N1=219`, `P1=0`, `Q1=1`, `R1=1` — exactly "N/P/Q/R stored as value
+minus one", as implemented. `CR` has `HSEON|HSERDY|PLL1ON|PLL1RDY` all set.
+
+So HSE 25 MHz / M=10 / N=220 / P=1 = 550 MHz is a valid configuration and the chip locks it.
+
+### What fails
+
+Executing the **VOS0 voltage-scaling change plus the SYSCLK switch** kills the SWD access port:
+
+```
+Error: Failed to read register DRW ... Target device responded with a WAIT response
+```
+
+And it is **not deterministic**. The same firmware, run twice:
+
+| Run | Last line printed |
+|---|---|
+| 1 | `# clk[5] PLL locked …` (got through VOS0, HSE, PLL) |
+| 2 | `# clk[1] PWR_CR3=… (LDOEN set)` (died before the VOS0 transition) |
+
+Same code, different failure point ⇒ not a parameter error. Something about the power/clock
+domain transition is destabilising the debug logic.
+
+### Recovery
+
+`probe-rs reset --connect-under-reset` does **not** recover it — most likely because nRESET is not
+wired on this board (it was listed as "recommended, not required" in the probe wiring table).
+
+The only reliable recovery is to erase the flash while holding reset:
+
+```bash
+probe-rs erase --chip STM32H723ZGTx --connect-under-reset
+```
+
+Verified twice. After erasing, the CPU no longer runs the bad firmware and the AP is reachable
+again.
+
+### Suspected cause
+
+DBGMCU lives in the **D3 domain**, so both the VOS0 supply transition and a D3PPRE change can
+disturb the debug logic. Which of the two dominates was not isolated, because each attempt costs
+another erase cycle.
+
+### A workaround worth trying next
+
+Don't rely on live RTT at 550 MHz. Instead:
+
+1. run the measurement with caches/clocks configured, storing samples in RAM as usual;
+2. on completion, write a magic word + length, then trigger `SYSRESETREQ`;
+3. after reset the chip is back on HSI 64 MHz and the AP works;
+4. read the RAM buffer directly with `probe-rs read`.
+
+The cycle counts are still valid (they were measured at the high clock); only the *transport*
+changes. This is the same trick as using a RAM ring buffer, one layer down.
+
+### Consequence for the project
+
+The absolute timing numbers remain 64 MHz numbers. The **1:1 masking slope is unaffected** — it
+was shown to be structural across three cache configurations in
+[`EXPERIMENT-03.md`](EXPERIMENT-03.md), and frequency is the same class of microarchitectural
+parameter.
+
+---
+
 ## 8. Sources
 
 | Conclusion | Source |
