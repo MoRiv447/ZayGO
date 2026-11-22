@@ -588,33 +588,58 @@ Verified from the host, with no firmware involved:
 `PWR_D3CR.VOSRDY` only says the write was accepted. And `ACTVOSRDY` is `PWR_CSR1` bit 13, **not**
 `PWR_CR3` bit 13 (H723 has no such bit in CR3).
 
-### The switch still fails above 200 MHz
+### The switch works when the core is not executing
 
-Even with SCALE0 confirmed active, 400 MHz and 550 MHz still die at the SYSCLK switch
-(marker `0xC0DE0008` never appears). What has been ruled out by single-variable measurement:
+The most informative result came from taking the CPU out of the loop entirely: halt the core,
+then perform the **same** register sequence from the host with `probe-rs write`.
 
-| Suspect | How it was excluded |
-|---|---|
-| PLL parameters | `DIVR` readback matches the intended N/P/Q/R at every target |
-| HSE, PLL lock, flash WS, dividers | markers 3–7 all appear before the failure |
-| VOS level | SCALE0 confirmed via `ACTVOS`; 400 with SCALE1 and with SCALE0 both fail |
-| **AXI / flash clock** | **200 MHz CPU with AXI at 200 MHz works** — same AXI as the failing 400 MHz case |
-| Cache ordering | vendor order (caches before clock) tried, no change |
-| D3 prescaler | 200 MHz sets the same `D3PPRE` and survives |
+```
+[7] 切换 SYSCLK -> PLL1  (关键一步)
+  OK   SWS = PLL1  (0x0000001b)，第 0 次读
+```
 
-The AXI result is the important one: it **refutes** the earlier "instruction fetch is the problem"
-hypothesis, which is why the planned ITCM experiment was not carried out. Moving code to ITCM
-would have been wasted effort against a refuted theory.
+`CFGR = 0x0000001b` means `SW = 3` **and** `SWS = 3` — the RCC completed the switch to 550 MHz.
 
-### What is still unknown
+So everything about the configuration is correct: the PLL parameters, VOS0, the flash wait states,
+the bus dividers, and 550 MHz as a target. **The problem is the CPU executing across the
+transition, not the clock configuration.**
 
-The failure depends on CPU clock above 200 MHz, with AXI, VOS, cache and PLL all eliminated,
-and the vendor's own example presumably running at 550 MHz on the same board. That means the
-difference is in a part of the clock-setup sequence that has not been found yet — most likely a
-register write the vendor's HAL performs and this hand-rolled sequence does not.
+The reverse control confirms the RCC is fine: `SW=2` switches to HSE successfully, and `SW=0`
+returns to HSI — only `SW=3` fails when the firmware does it.
 
-Further blind iteration costs one flash-erase cycle per attempt and leaves the board unusable
-until recovered, so the work is parked at a verified 200 MHz.
+### One trap in this experiment (and a retraction)
+
+The first version of the host-side script wrote `PLLCFGR = 0x04` outright and got "the switch
+fails". That was **an artifact of the script**: `PLLCFGR` resets to `0x01FF0000`, where bits 16–24
+are `DIVP1EN` / `DIVQ1EN` / `DIVR1EN` — the output-divider enables. Overwriting the register
+disabled the P output, so of course the PLL could not drive SYSCLK.
+
+The firmware always used read-modify-write, so it never had this bug. Had this not been caught, the
+conclusion would have been exactly wrong.
+
+### Retraction: the AXI test did not refute the fetch hypothesis
+
+Earlier, 200 MHz CPU with AXI at 200 MHz was measured working, and that was taken as proof that
+"instruction fetch is not the problem". **That conclusion was too strong.** It only showed that at
+CPU = 200 MHz there is enough margin in the fetch path. At CPU = 400/550 MHz the margin is gone,
+and the failure appears.
+
+Combined with the host-poke result, the best-supported explanation is now:
+
+> SYSCLK jumps from 64 MHz to the target in a single write. The instructions immediately after that
+> write are fetched from flash, and at 400+ MHz that fetch fails. The HardFault handler is also in
+> flash, so nothing runs and nothing is logged.
+
+### Attempted fix that did not take effect
+
+The obvious remedy is to execute the few instructions around the switch from RAM. Putting the
+function in `.data` (`#[link_section = ".data"]`, with and without `#[no_mangle] extern "C"`) **did
+not work with this toolchain**: `.data` stayed 4 bytes and no symbol appeared, so the attribute was
+effectively ignored and the code presumably stayed in `.text`. The attempt was reverted rather than
+left in as dead weight.
+
+The correct way is a dedicated `.ramfunc` output section in the linker script, which means
+supplying a custom `link.x` instead of cortex-m-rt's. That is the next step.
 
 ### Recovery
 

@@ -166,6 +166,19 @@ fn dsb_isb() {
     unsafe { asm!("dsb", "isb") };
 }
 
+/// 写 `CFGR.SW=PLL1` 并等 `SWS` 真正变成 PLL1。
+///
+/// 目前仍在 flash 上执行 —— 这是已知瓶颈，见第 8 步的注释。
+fn switch_and_wait() -> bool {
+    modify(RCC_CFGR, CFGR_SW_MASK, SW_PLL1);
+    for _ in 0..TIMEOUT {
+        if rd(RCC_CFGR) & CFGR_SWS_MASK == SWS_PLL1 << 3 {
+            return true;
+        }
+    }
+    false
+}
+
 /// 有界等待某个位。返回 false 表示超时。
 fn wait_set(addr: usize, mask: u32, want: bool) -> bool {
     for _ in 0..TIMEOUT {
@@ -288,9 +301,14 @@ pub fn init(target: Target, stage: Stage) -> Result<u32, &'static str> {
         rd(RCC_D3CFGR)
     );
 
-    // 8) 切系统时钟到 PLL1，并等切换真的生效
-    modify(RCC_CFGR, CFGR_SW_MASK, SW_PLL1);
-    if !wait_set(RCC_CFGR, CFGR_SWS_MASK, true) {
+    // 8) 切系统时钟到 PLL1，并等切换真的生效。
+    //
+    // 已知瓶颈：这一步在 flash 上执行，而 SYSCLK 会在这一拍从 64MHz 跳到目标频率。
+    // 核 halt 时由主机侧写同样的寄存器能切成功（实测 CFGR=0x1b @550MHz），
+    // 但固件执行时 400/550 都会失败 —— 差别只在"CPU 是否在取指"。
+    // 原计划把这几行搬进 RAM 执行，但本工具链下 `link_section` 没能把函数放进 `.data`
+    // （.data 始终只有 4 字节），所以该尝试未生效，见文档。
+    if !switch_and_wait() {
         modify(RCC_CFGR, CFGR_SW_MASK, 0);
         return Err("切换 SYSCLK 到 PLL1 超时");
     }
