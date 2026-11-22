@@ -651,6 +651,53 @@ So the routine was emitted, copied and entered — and the CPU still died inside
 bytes are hand-written assembly, and one wrong encoding would fault in exactly the same way. The
 experiment cannot tell "fetch from flash is the problem" apart from "my assembly is wrong".
 
+### A confounder found the hard way: `rprintln!` can block
+
+While chasing the RAM-execution path, one observation changed the diagnosis:
+
+```
+mark(2, 0xC0DE_0007)          // 总线分频已设置
+rprintln!("# clk[7] dividers: …");   // ← 这一行从未出现
+```
+
+The marker was written, the very next statement never produced output. The firmware had not died
+in the clock switch — **it was blocked inside the print**.
+
+RTT is initialised with `ChannelMode::BlockIfFull` (deliberately: `NoBlockSkip` silently dropped
+30 % of samples in experiment 01). Once the D3 prescaler changes, the debug access port can lose
+sync and probe-rs stops draining the buffer. The buffer fills, and the next `rprintln!` waits
+**forever**.
+
+That is indistinguishable from a hang in the clock switch, and it means several earlier "the CPU
+died at the switch" observations are **not trustworthy**. The diagnostic prints themselves may have
+been the thing that hung.
+
+Consequence adopted: **no printing at all during clock configuration.** The `CLK_VERBOSE` constant
+defaults to `false`, and progress is recorded only in `.uninit` markers, which never block.
+
+### Calling copied code: the Thumb bit
+
+Trying to execute the switch from a RAM copy faulted immediately, and the reason was not the clock:
+
+```rust
+// 错：缓冲区 4 字节对齐，bit0 = 0
+let f: fn(..) = transmute(buf_addr);
+```
+
+On Cortex-M a function pointer carries the Thumb state in **bit 0**, which must be 1. Calling an
+even address makes the core try to execute Thumb code in ARM state and fault at once — presenting
+exactly like "the switch killed the CPU".
+
+```rust
+let f: fn(..) = transmute((buf_addr | 1) as *const u8);
+```
+
+The RAM path still does not work (the call faults even after this fix, pointing at a second defect
+in the hand-written routine), so the experiment was reverted rather than left in. But two things
+came out of it that are worth keeping: the `BlockIfFull` confounder above, and a self-test pattern
+that answers "does this routine execute at all?" without any side effects — call it with
+`SW = 0` / expected `SWS = 0`, which is a no-op on a chip already running from HSI.
+
 ### A mistake worth recording
 
 While reading the progress markers back, a hard-coded address (`0x24003488`) was used even though

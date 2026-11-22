@@ -292,7 +292,7 @@ repository.
 | Only one board | Interrupt and multi-core testing are limited | All experiments are single-core friendly | known |
 | STM32H7 D-Cache vs DMA coherency | Screen corruption, random crashes | Mark the framebuffer Non-Cacheable; put DMA buffers in AXI SRAM, never DTCM | recorded in the hardware notes |
 | WFI conflicts with the debug port | Cannot debug a sleeping system | Root cause of the failed `DBG_SLEEP` workaround still unknown | **unresolved** |
-| Above 200 MHz the firmware's SYSCLK switch fails | 550 MHz unmeasurable | **RCC proven capable** (`SWS=PLL1` at 550 MHz from the host with the core halted), so the config is right and the failure is CPU-side. Executing the switch from a RAM copy did not help, but the routine was hand-written assembly, so the test cannot separate "fetch problem" from "assembly bug". VOS encoding bug found and fixed along the way | **blocked**, two candidates remain |
+| Above 200 MHz the firmware's SYSCLK switch fails | 550 MHz unmeasurable | **RCC proven capable** (`SWS=PLL1` at 550 MHz from the host with the core halted). A serious confounder was then found: `rprintln!` uses `BlockIfFull`, and once the D3 prescaler change kills the debug link the next print **blocks forever** — indistinguishable from a switch hang. Clock-init printing is now disabled; the RAM-execution path still faults (second defect in the hand-written routine), so the question stays open | **blocked**, diagnosis de-confounded |
 
 ---
 

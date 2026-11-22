@@ -98,6 +98,15 @@ const CFGR_SWS_MASK: u32 = 0b111 << 3;
 const SW_PLL1: u32 = 3;
 const SWS_PLL1: u32 = 3;
 
+/// 时钟初始化阶段是否打印诊断信息。
+///
+/// **必须默认关闭**：RTT 用的是 `BlockIfFull`，而改完 D3PPRE 之后调试口可能失联、
+/// probe-rs 停止搬运。此时任何 `rprintln!` 都会永久阻塞 ——
+/// 表现和"时钟切换挂死"一模一样，实际只是卡在打印上。
+///
+/// 诊断改用 `.uninit` 里的进度标记（见 `measure::mark`），它不依赖调试口。
+const CLK_VERBOSE: bool = false;
+
 /// 等待循环的上界。64MHz 下约几十毫秒，远超任何正常锁定时间。
 const TIMEOUT: u32 = 2_000_000;
 
@@ -211,14 +220,20 @@ pub fn init(target: Target, stage: Stage) -> Result<u32, &'static str> {
     // 1) 供电：确认 LDO 模式。
     //    这里**不能**等 ACTVOSRDY —— H723 的 PWR_CR3 没有这个位。
     crate::measure::mark(1, 0xC0DE_0001);
-    rprintln!("# clk[1] PWR_CR3={:#010x}", rd(PWR_CR3));
+    if CLK_VERBOSE {
+        rprintln!("# clk[1] PWR_CR3={:#010x}", rd(PWR_CR3));
+    }
     modify(PWR_CR3, CR3_LDOEN | CR3_BYPASS, CR3_LDOEN);
-    rprintln!("# clk[1] PWR_CR3={:#010x} (LDO mode)", rd(PWR_CR3));
+    if CLK_VERBOSE {
+        rprintln!("# clk[1] PWR_CR3={:#010x} (LDO mode)", rd(PWR_CR3));
+    }
 
     // 2) 电压等级。只有 550MHz 需要 VOS0；先升压再升频，顺序不能反。
     crate::measure::mark(1, 0xC0DE_0002);
     if vos0 {
-        rprintln!("# clk[2] PWR_D3CR={:#010x}", rd(PWR_D3CR));
+    if CLK_VERBOSE {
+            rprintln!("# clk[2] PWR_D3CR={:#010x}", rd(PWR_D3CR));
+    }
         // 一律用 SCALE0（编码 0b00）。它是最高档，对任何目标频率都安全；
         // 而 SCALE1 在 H72x/73x 上的上限可能只有 275MHz，用它跑 400 会失败。
         modify(PWR_D3CR, D3CR_VOS_MASK, VOS_SCALE0);
@@ -227,13 +242,17 @@ pub fn init(target: Target, stage: Stage) -> Result<u32, &'static str> {
         }
         // CSR1 的 ACTVOS[15:14] 才是"当前实际生效的电压等级"，
         // D3CR 的 VOSRDY 只说明写入被接受。两者都要看。
-        rprintln!(
-            "# clk[2] VOS written, D3CR={:#010x} CSR1={:#010x} (ACTVOS bits 15:14)",
-            rd(PWR_D3CR),
-            rd(PWR_CSR1)
-        );
+    if CLK_VERBOSE {
+            rprintln!(
+                "# clk[2] VOS written, D3CR={:#010x} CSR1={:#010x} (ACTVOS bits 15:14)",
+                rd(PWR_D3CR),
+                rd(PWR_CSR1)
+            );
+    }
     } else {
-        rprintln!("# clk[2] VOS left at reset default");
+    if CLK_VERBOSE {
+            rprintln!("# clk[2] VOS left at reset default");
+    }
     }
     crate::measure::mark(1, 0xC0DE_0003);
 
@@ -243,7 +262,9 @@ pub fn init(target: Target, stage: Stage) -> Result<u32, &'static str> {
         return Err("HSE 未起振（晶振有问题？）");
     }
     crate::measure::mark(1, 0xC0DE_0004);
-    rprintln!("# clk[3] HSE ready, RCC_CR={:#010x}", rd(RCC_CR));
+    if CLK_VERBOSE {
+        rprintln!("# clk[3] HSE ready, RCC_CR={:#010x}", rd(RCC_CR));
+    }
 
     // 4) 配 PLL1
     modify(RCC_PLLCKSELR, 0b11, PLLSRC_HSE);
@@ -265,14 +286,18 @@ pub fn init(target: Target, stage: Stage) -> Result<u32, &'static str> {
         return Err("PLL1 未锁定（参数或供电）");
     }
     crate::measure::mark(2, 0xC0DE_0005);
-    rprintln!(
-        "# clk[5] PLL locked: CR={:#010x} DIVR={:#010x}",
-        rd(RCC_CR),
-        rd(RCC_PLL1DIVR)
-    );
+    if CLK_VERBOSE {
+        rprintln!(
+            "# clk[5] PLL locked: CR={:#010x} DIVR={:#010x}",
+            rd(RCC_CR),
+            rd(RCC_PLL1DIVR)
+        );
+    }
 
     if stage == Stage::Lock {
-        rprintln!("# clk: Lock-only stage, staying on HSI");
+    if CLK_VERBOSE {
+            rprintln!("# clk: Lock-only stage, staying on HSI");
+    }
         return Ok(cpu_hz());
     }
 
@@ -284,7 +309,9 @@ pub fn init(target: Target, stage: Stage) -> Result<u32, &'static str> {
     );
     dsb_isb();
     crate::measure::mark(1, 0xC0DE_0006);
-    rprintln!("# clk[6] FLASH_ACR={:#010x}", rd(FLASH_ACR));
+    if CLK_VERBOSE {
+        rprintln!("# clk[6] FLASH_ACR={:#010x}", rd(FLASH_ACR));
+    }
 
     // 7) 设总线分频。H7 的分频字段是分级编码：0=/1, 1=/2, 2=/4 …
     modify(RCC_D1CFGR, 0xF << 8, 0 << 8); // D1CPRE = /1
@@ -294,12 +321,14 @@ pub fn init(target: Target, stage: Stage) -> Result<u32, &'static str> {
     modify(RCC_D2CFGR, 0b111 << 8, 1 << 8); // D2PPRE2 = /2 → APB2
     modify(RCC_D3CFGR, 0b111 << 4, 1 << 4); // D3PPRE = /2 → APB4
     crate::measure::mark(2, 0xC0DE_0007);
-    rprintln!(
-        "# clk[7] dividers: D1CFGR={:#010x} D2CFGR={:#010x} D3CFGR={:#010x}",
-        rd(RCC_D1CFGR),
-        rd(RCC_D2CFGR),
-        rd(RCC_D3CFGR)
-    );
+    if CLK_VERBOSE {
+        rprintln!(
+            "# clk[7] dividers: D1CFGR={:#010x} D2CFGR={:#010x} D3CFGR={:#010x}",
+            rd(RCC_D1CFGR),
+            rd(RCC_D2CFGR),
+            rd(RCC_D3CFGR)
+        );
+    }
 
     // 8) 切系统时钟到 PLL1，并等切换真的生效。
     //
@@ -313,7 +342,9 @@ pub fn init(target: Target, stage: Stage) -> Result<u32, &'static str> {
         return Err("切换 SYSCLK 到 PLL1 超时");
     }
     crate::measure::mark(3, 0xC0DE_0008);
-    rprintln!("# clk[8] SYSCLK = PLL1, CFGR={:#010x}", rd(RCC_CFGR));
+    if CLK_VERBOSE {
+        rprintln!("# clk[8] SYSCLK = PLL1, CFGR={:#010x}", rd(RCC_CFGR));
+    }
 
     CPU_HZ.store(target_hz, Ordering::Relaxed);
     Ok(target_hz)
